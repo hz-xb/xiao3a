@@ -6237,18 +6237,22 @@ errors ${window.__errors.length}${window.__errors.length?`
 
   var cfg = {
     esp: false, espBox: true, espHp: true, espName: true, espLine: true, espDist: true,
-    track: true, part: 'head', range: 140, wallbang: true, linePos: 'bottom',
+    track: true, part: 'head', range: 140, wallbang: true, linePos: 'bottom', tps: false, tpsDist: 1.8,
     speed: 1, jump: 1, god: false, noclip: false, infAmmo: true, fly: false, spin: false,
-    fps: 0, endless: false, keys: false,
+    fps: 0, mode: 'normal', scene: 'dusk', quality: 'auto', keys: false,
     room: ''
   };
   var gunIdx = 0;
 
   var GUNS = [
-    { name: '制式步枪', dmg: 1, mag: 30, reserve: 150, gap: 0.083 },
-    { name: '速射', dmg: .7, mag: 60, reserve: 400, gap: .055 },
-    { name: '重击', dmg: 5.5, mag: 10, reserve: 60, gap: .4 },
-    { name: '激光', dmg: 2.4, mag: 45, reserve: 400, gap: .07 }
+    { name: '制式步枪', dmg: 1, mag: 30, reserve: 150, gap: .083 },
+    { name: '紧凑冲锋', dmg: .72, mag: 40, reserve: 320, gap: .055 },
+    { name: '精确射手', dmg: 2.2, mag: 20, reserve: 120, gap: .16 },
+    { name: '重狙', dmg: 5.5, mag: 5, reserve: 40, gap: .42 },
+    { name: '战术霰弹', dmg: 1.7, mag: 8, reserve: 60, gap: .3 },
+    { name: '轻机枪', dmg: .95, mag: 100, reserve: 500, gap: .07 },
+    { name: '脉冲激光', dmg: 2.4, mag: 45, reserve: 400, gap: .07 },
+    { name: '实验磁轨', dmg: 9, mag: 3, reserve: 24, gap: .55 }
   ];
 
   var LS = 'xiaobing.assist.v3';
@@ -6387,7 +6391,10 @@ errors ${window.__errors.length}${window.__errors.length?`
       '<div class="cx-sec"><b>人物</b>' +
       '<div class="cx-line"><label>移动速度</label><div class="cx-range"><input id="cx-speed" type="range" min="1" max="5" step="0.05"><output id="cx-speed-v">1.00×</output></div></div>' +
       '<div class="cx-line"><label>跳跃高度</label><div class="cx-range"><input id="cx-jump" type="range" min="1" max="4" step="0.05"><output id="cx-jump-v">1.00×</output></div></div>' +
-      line('无敌', 'god') + line('穿墙', 'noclip') + line('飞天（跳/蹲升降）', 'fly') + line('自动旋转', 'spin') + '</div>' +
+      line('无敌', 'god') + line('穿墙', 'noclip') + line('飞天（跳/蹲升降）', 'fly') + line('自动旋转', 'spin') +
+      line('第三人称', 'tps') +
+      '<div class="cx-line"><label>镜头距离</label><div class="cx-range"><input id="cx-tpsd" type="range" min="0.8" max="4" step="0.1"><output id="cx-tpsd-v">1.8m</output></div></div>' +
+      '</div>' +
       '<div class="cx-sec"><b>武器</b>' + line('无限子弹', 'infAmmo') +
       '<div class="cx-seg" id="cx-guns">' +
       GUNS.map(function (g, i) { return '<button data-g="' + i + '">' + g.name + '</button>'; }).join('') +
@@ -6397,8 +6404,14 @@ errors ${window.__errors.length}${window.__errors.length?`
       '<div class="cx-page" data-page="opt">' +
       '<div class="cx-sec"><b>画面</b>' +
       '<div class="cx-line"><label>帧率</label><output id="cx-fps-v" style="font:600 11px ui-monospace;color:#ffb347">--</output></div>' +
-      '<div class="cx-tip">帧率保持系统上限（不锁定），锁定会拖慢逻辑帧。</div></div>' +
-      '<div class="cx-sec"><b>模式</b>' + line('无尽围剿（额外刷怪）', 'endless') + '</div>' +
+      '<div class="cx-line"><label>画质</label><div class="cx-seg g4" id="cx-quality" style="flex:1">' +
+      '<button data-qc="low">低</button><button data-qc="medium">中</button><button data-qc="high">高</button><button data-qc="ultra">极高</button></div></div>' +
+      '<div class="cx-tip">低画质优先帧率，极高画质优先画面；立即生效。</div></div>' +
+      '<div class="cx-sec"><b>玩法模式</b><div class="cx-seg g4" id="cx-mode">' +
+      '<button data-m="normal">剧情</button><button data-m="endless">无尽</button><button data-m="waves">波次</button><button data-m="boss">猎杀</button></div>' +
+      '<div class="cx-tip" id="cx-mode-note">剧情为原版任务；波次逐波加压；猎杀刷新重装猎犬。</div></div>' +
+      '<div class="cx-sec"><b>场景</b><div class="cx-seg" id="cx-scene">' +
+      '<button data-s="dusk">黄昏</button><button data-s="night">夜战</button><button data-s="fog">浓雾</button></div></div>' +
       '<div class="cx-sec"><b>局域网对战 · 50 杀</b>' +
       '<div class="cx-line"><label>房间号</label><input class="cx-input" id="cx-room" maxlength="6" placeholder="000000"></div>' +
       '<div class="cx-btnrow"><button id="cx-host">创建房间</button><button id="cx-join">加入房间</button>' +
@@ -6451,9 +6464,22 @@ errors ${window.__errors.length}${window.__errors.length?`
     [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
       b.addEventListener('click', function () { gunIdx = +b.getAttribute('data-g'); applyGun(); sync(); save(); tip('枪械：' + GUNS[gunIdx].name); });
     });
+    [].forEach.call(panel.querySelectorAll('#cx-quality button'), function (b) {
+      b.addEventListener('click', function () { cfg.quality = b.getAttribute('data-qc'); applyQuality(); sync(); save(); tip('画质：' + b.textContent); });
+    });
+    [].forEach.call(panel.querySelectorAll('#cx-mode button'), function (b) {
+      b.addEventListener('click', function () {
+        cfg.mode = b.getAttribute('data-m'); resetMode(); sync(); save();
+        tip('模式：' + b.textContent);
+      });
+    });
+    [].forEach.call(panel.querySelectorAll('#cx-scene button'), function (b) {
+      b.addEventListener('click', function () { cfg.scene = b.getAttribute('data-s'); applyScene(); sync(); save(); tip('场景：' + b.textContent); });
+    });
     [].forEach.call(panel.querySelectorAll('#cx-linepos button'), function (b) {
       b.addEventListener('click', function () { cfg.linePos = b.getAttribute('data-lp'); sync(); save(); tip('射线起点：' + b.textContent); });
     });
+    sliders('cx-tpsd', 'tpsDist', function (v) { return v.toFixed(1) + 'm'; });
     sliders('cx-speed', 'speed', function (v) { return v.toFixed(2) + '×'; });
     sliders('cx-jump', 'jump', function (v) { return v.toFixed(2) + '×'; });
     sliders('cx-range', 'range', function (v) { return Math.round(v) + '°'; });
@@ -6512,6 +6538,15 @@ errors ${window.__errors.length}${window.__errors.length?`
     if (s3) { s3.value = cfg.range; document.getElementById('cx-range-v').textContent = Math.round(cfg.range) + '°'; }
     [].forEach.call(document.querySelectorAll('#cx-linepos button'), function (b) {
       b.setAttribute('aria-pressed', b.getAttribute('data-lp') === cfg.linePos ? 'true' : 'false');
+    });
+    [].forEach.call(document.querySelectorAll('#cx-quality button'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-qc') === cfg.quality ? 'true' : 'false');
+    });
+    [].forEach.call(document.querySelectorAll('#cx-mode button'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-m') === cfg.mode ? 'true' : 'false');
+    });
+    [].forEach.call(document.querySelectorAll('#cx-scene button'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-s') === cfg.scene ? 'true' : 'false');
     });
     var rm = document.getElementById('cx-room'); if (rm && !rm.value) rm.value = cfg.room || '';
 
@@ -6732,6 +6767,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     for (var i = 0; i < list.length; i++) {
       var en = list[i];
       if (!en || !en.alive || !en.pos) continue;
+      trackVel(en);
       var hp = en.pos.clone(); if (en.type === 'hound') hp.y += 1.35;
       var v = hp.project(cam), dist = en.pos.distanceTo(cam.position);
       var col = en.type === 'hound' ? '#ff6a4d' : '#ffb347';
@@ -6820,10 +6856,37 @@ errors ${window.__errors.length}${window.__errors.length?`
   }
 
   /* --------------------------------------------------------------- 追踪逻辑 */
+  function trackVel(en) {
+    var last = en._cxLast, v = en._cxVel;
+    if (!last) { en._cxLast = { p: en.pos.clone(), t: G.time.t }; return { x: 0, y: 0, z: 0 }; }
+    var dt = Math.max(.001, G.time.t - last.t);
+    if (dt > .4) { last.p.copy(en.pos); last.t = G.time.t; return { x: 0, y: 0, z: 0 }; }
+    v = { x: (en.pos.x - last.p.x) / dt, y: (en.pos.y - last.p.y) / dt, z: (en.pos.z - last.p.z) / dt };
+    last.p.copy(en.pos); last.t = G.time.t;
+    en._cxVel = v;
+    return v;
+  }
+
   function pickPoint(en, part) {
-    var base = en.pos;
-    if (part === 'head') return en.headPos ? en.headPos.clone() : base.clone().setY(base.y + 1.4);
-    return base.clone().setY(base.y + (en.type === 'hound' ? .9 : .1));
+    var v = en._cxVel || { x: 0, y: 0, z: 0 };
+    var lead = 0.06;
+    var base = en.pos.clone();
+    base.x += v.x * lead; base.z += v.z * lead;
+    if (part === 'head') {
+      var hp = en.headPos ? en.headPos.clone() : base.clone().setY(base.y + 1.4);
+      hp.y += v.y * lead;
+      return hp;
+    }
+    base.y += en.type === 'hound' ? .9 : .1;
+    base.y += v.y * lead;
+    return base;
+  }
+
+  function verifyShot(origin, dir, en) {
+    try {
+      var hit = G.enemies.raycast(origin, dir, 320);
+      return hit && hit.enemy === en ? hit : null;
+    } catch (e) { return null; }
   }
 
   function losOK(a, b) {
@@ -6839,6 +6902,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     for (var i = 0; i < list.length; i++) {
       var en = list[i];
       if (!en || !en.alive || !en.pos) continue;
+      trackVel(en);
       var partPick = cfg.part;
       if (partPick === 'auto') partPick = losOK(origin, en.headPos || en.pos) ? 'head' : 'body';
       var p = pickPoint(en, partPick);
@@ -6898,6 +6962,12 @@ errors ${window.__errors.length}${window.__errors.length?`
                 var ep = aim.point.distanceTo(origin);
                 if (wall && wall.dist < ep - .2) return directHit(origin, aim, dir, opts);
               }
+              // 命中校验：高速飞行的无人机常常一个逻辑帧就飘出弱点球，这里回退到躯干并重新解算
+              if (!verifyShot(origin, dir, aim.en)) {
+                var bp = pickPoint(aim.en, 'body');
+                var bd = bp.clone().sub(origin).normalize();
+                if (verifyShot(origin, bd, aim.en)) { dir = bd; aim.part = 'body'; aim.point = bp; }
+              }
             }
           }
         }
@@ -6942,8 +7012,9 @@ errors ${window.__errors.length}${window.__errors.length?`
       G.weapon.ammo = G.weapon.magSize;
       G.weapon.reserve = Math.max(G.weapon.reserve || 0, 400);
     }
+    applyTps();
     drawESP();
-    tickEndless();
+    tickMode();
     tickFpsMeter();
   }
 
@@ -6977,20 +7048,138 @@ errors ${window.__errors.length}${window.__errors.length?`
 
   function applyFps() { /* 帧率不再锁定，交给系统上限 */ }
 
-  /* ------------------------------------------------------------- 无尽围剿 */
-  function tickEndless() {
-    if (!cfg.endless || !G.game || G.game.state !== 'playing' || !G.player.alive) return;
-    var now = G.time.t;
-    if (now - lastEndless < 3.2) return;
-    var alive = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
-    if (alive >= 6) return;
-    lastEndless = now;
-    var P = G.player.pos, ang = Math.random() * Math.PI * 2, rr = 24 + Math.random() * 16;
-    var pos = new V3(P.x + Math.cos(ang) * rr, 0, P.z + Math.sin(ang) * rr);
+  /* --------------------------------------------------------------- 玩法模式 */
+  var waveNo = 0, waveClock = 0, bossAlive = null;
+
+  function resetMode() {
+    waveNo = 0; waveClock = 0; bossAlive = null; lastEndless = -9;
+    var note = document.getElementById('cx-mode-note');
+    if (note) {
+      note.textContent = cfg.mode === 'waves' ? '波次：每波敌人数量递增，清完自动下一波。'
+        : cfg.mode === 'boss' ? '猎杀：刷新一只强化猎犬（900 血），击杀后再刷。'
+        : cfg.mode === 'endless' ? '无尽：场上敌人少于 6 时持续补充。'
+        : '剧情为原版任务；波次逐波加压；猎杀刷新重装猎犬。';
+    }
+  }
+
+  function spawnRing(count, minR, maxR, hp) {
+    if (!G || !G.player) return;
+    var P = G.player.pos;
+    for (var i = 0; i < count; i++) {
+      var ang = Math.random() * Math.PI * 2, rr = minR + Math.random() * (maxR - minR);
+      var pos = new V3(P.x + Math.cos(ang) * rr, 0, P.z + Math.sin(ang) * rr);
+      try {
+        if (Math.random() < .6) {
+          var h = G.enemies.spawn('hound', pos, {});
+          if (h && hp) h.hp = hp;
+        } else {
+          pos.y = 3 + Math.random() * 4;
+          G.enemies.spawn('gull', pos, {});
+        }
+      } catch (e) {}
+    }
+  }
+
+  function tickMode() {
+    if (!G || !G.game || G.game.state !== 'playing' || !G.player.alive) return;
+    if (cfg.mode === 'endless') {
+      var now = G.time.t;
+      if (now - lastEndless < 3.2) return;
+      var alive = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
+      if (alive >= 6) return;
+      lastEndless = now;
+      spawnRing(1, 24, 40, 0);
+      return;
+    }
+    if (cfg.mode === 'waves') {
+      if (!waveClock) waveClock = G.time.t;
+      var aliveW = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
+      if (G.time.t - waveClock > 7 && (aliveW === 0 || G.time.t - waveClock > 16)) {
+        waveNo++; waveClock = G.time.t;
+        spawnRing(Math.min(9, 2 + waveNo), 22, 36, 0);
+        tip('第 ' + waveNo + ' 波');
+      }
+      return;
+    }
+    if (cfg.mode === 'boss') {
+      var aliveB = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
+      if (bossAlive && !bossAlive.alive) bossAlive = null;
+      if (!bossAlive && aliveB === 0) {
+        var ang2 = Math.random() * Math.PI * 2, rr2 = 30;
+        var p2 = new V3(G.player.pos.x + Math.cos(ang2) * rr2, 0, G.player.pos.z + Math.sin(ang2) * rr2);
+        try {
+          bossAlive = G.enemies.spawn('hound', p2, {});
+          if (bossAlive) { bossAlive.hp = 900; bossAlive.maxHealth = 900; bossAlive.boss = true; }
+        } catch (e) {}
+        tip('重装猎犬已入场');
+      }
+    }
+  }
+
+  /* ----------------------------------------------------------- 第三人称镜头 */
+  function applyTps() {
+    if (!G || !G.camera || !G.player || !G.weapon) return;
+    var on = cfg.tps && G.game && G.game.state === 'playing';
+    if (!on) {
+      if (cfg._tpsWas && G.weapon.setVisible) { try { G.weapon.setVisible(true); } catch (e) {} }
+      cfg._tpsWas = false;
+      return;
+    }
+    var P = G.player, eye = P.eye, fwd = P.forward.clone();
+    if (fwd.lengthSq() < .001) return;
+    var d = Math.max(.8, cfg.tpsDist), back = eye.clone().addScaledVector(fwd, -d);
     try {
-      if (Math.random() < .55) G.enemies.spawn('hound', pos, {});
-      else { pos.y = 3 + Math.random() * 3; G.enemies.spawn('gull', pos, {}); }
+      var wall = G.physics.raycast(eye, fwd.clone().negate(), d + .5);
+      if (wall) back = eye.clone().addScaledVector(fwd, -Math.max(.35, wall.dist - .3));
     } catch (e) {}
+    G.camera.position.copy(back);
+    G.camera.lookAt(eye.clone().addScaledVector(fwd, 8));
+    if (G.weapon.setVisible) { try { G.weapon.setVisible(false); } catch (e) {} }
+    cfg._tpsWas = true;
+  }
+
+  /* ---------------------------------------------------------------- 画质档位 */
+  function applyQuality() {
+    if (!G || !cfg.quality || cfg.quality === 'auto') return;
+    var btn = document.querySelector('[data-q="' + cfg.quality + '"]');
+    if (btn) { try { btn.click(); } catch (e) {} }
+  }
+
+  /* ---------------------------------------------------------------- 场景环境 */
+  var sceneBase = null;
+  function applyScene() {
+    if (!G || !G.scene) return;
+    var sc = G.scene;
+    if (!sceneBase) {
+      sceneBase = {
+        fog: sc.fog ? { color: sc.fog.color.getHex(), density: sc.fog.density } : null,
+        sun: G.render && G.render.sun ? G.render.sun.intensity : null,
+        exposure: G.render && G.render.post ? G.render.post.exposure : null,
+        bg: sc.background ? (sc.background.getHex ? sc.background.getHex() : null) : null
+      };
+    }
+    if (sceneBase.sun != null && G.render && G.render.sun) G.render.sun.intensity = sceneBase.sun;
+    if (!sc.fog && cfg.scene !== 'dusk' && G.THREE) {
+      sc.fog = new G.THREE.FogExp2(0x060a12, cfg.scene === 'fog' ? .014 : .0022);
+      sceneBase.createdFog = true;
+    } else if (sc.fog && sceneBase.createdFog && cfg.scene === 'dusk') {
+      sc.fog = null; sceneBase.createdFog = false;
+    }
+    if (sceneBase.exposure != null && G.render && G.render.post) G.render.post.exposure = sceneBase.exposure;
+    if (sc.fog && sceneBase.fog) { sc.fog.color.setHex(sceneBase.fog.color); sc.fog.density = sceneBase.fog.density; }
+    var world = document.querySelector('#app canvas:not(#cx-esp)');
+    if (world) {
+      world.style.filter = cfg.scene === 'night' ? 'brightness(.52) saturate(.72) hue-rotate(-10deg) contrast(1.06)'
+        : cfg.scene === 'fog' ? 'brightness(.94) contrast(.9) saturate(.85)' : '';
+    }
+    if (cfg.scene === 'night') {
+      if (G.render && G.render.sun) G.render.sun.intensity = Math.min(1, sceneBase.sun || 1) * .06;
+      if (G.render && G.render.post) G.render.post.exposure = (sceneBase.exposure || 1) * .55;
+      if (sc.fog) { sc.fog.color.setHex(0x060a12); sc.fog.density = .0022; }
+    } else if (cfg.scene === 'fog') {
+      if (G.render && G.render.sun) G.render.sun.intensity = Math.min(1, sceneBase.sun || 1) * .55;
+      if (sc.fog) { sc.fog.color.setHex(0x8b8f8c); sc.fog.density = .014; }
+    }
   }
 
   /* --------------------------------------------------------- 局域网 50 杀对战 */
@@ -7252,6 +7441,8 @@ errors ${window.__errors.length}${window.__errors.length?`
     applyFps();
     if (G.game && G.game.state === 'playing') { show(true); lastState = 'playing'; }
     if (cfg.keys) setTouchEdit(true);
+    applyQuality();
+    if (cfg.scene !== 'dusk') applyScene();
     watch();
     console.log('[assist] v3 mounted');
   }
