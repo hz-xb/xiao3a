@@ -6465,7 +6465,7 @@ errors ${window.__errors.length}${window.__errors.length?`
       b.addEventListener('click', function () { cfg.part = b.getAttribute('data-part'); sync(); save(); tip('追踪部位：' + b.textContent); });
     });
     [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
-      b.addEventListener('click', function () { gunIdx = +b.getAttribute('data-g'); applyGun(); showGunModel(); if(vmGroup&&vmGroup.parent)vmGroup.parent.visible=true; sync(); save(); tip('枪械：' + GUNS[gunIdx].name); });
+      b.addEventListener('click', function () { gunIdx = +b.getAttribute('data-g'); applyGun(); showGunModel(); sync(); save(); tip('枪械：' + GUNS[gunIdx].name); });
     });
     [].forEach.call(panel.querySelectorAll('#cx-quality button'), function (b) {
       b.addEventListener('click', function () { cfg.quality = b.getAttribute('data-qc'); applyQuality(); sync(); save(); tip('画质：' + b.textContent); });
@@ -7277,90 +7277,140 @@ errors ${window.__errors.length}${window.__errors.length?`
     desert: { name: '沙漠哨站', start: { x: 900, y: 0.04, z: 858, yaw: Math.PI } },
     urban: { name: '夜城街区', start: { x: -900, y: 0.04, z: 858, yaw: Math.PI } }
   };
-  var mapGroups = {}, mapBuilt = {}, mapBoundsDone = false;
+  var mapGroups = {}, mapBuilt = {}, mapBoundsDone = false, mapFill = null;
 
-  function mapMat(color, rough) {
-    return new THREE.MeshStandardMaterial({ color: color, roughness: rough == null ? .92 : rough, metalness: .04 });
+  function nativeMat(name) {
+    try {
+      if (G && G.mats && G.mats.get) {
+        var m = G.mats.get(name, { triplanar: true });
+        if (m) return m;
+      }
+    } catch (e) {}
+    return null;
   }
 
-  function addSolid(group, m, w, h, d, x, y, z, color, collide) {
-    var mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mapMat(color));
+  function addSolid(group, w, h, d, x, y, z, matName, collide) {
+    var mat = matName ? nativeMat(matName) : null;
+    if (!mat) mat = new THREE.MeshStandardMaterial({ color: 0x8c8c8c, roughness: .9 });
+    var geo = new THREE.BoxGeometry(w, h, d);
+    var mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(x, y + h / 2, z);
     mesh.castShadow = false; mesh.receiveShadow = true;
     group.add(mesh);
     if (collide !== false) {
       try {
-        G.physics.addBox(
-          new V3(x - w / 2, y, z - d / 2),
-          new V3(x + w / 2, y + h, z + d / 2),
-          { surface: 'concrete' }
-        );
+        G.physics.addBox(new V3(x - w / 2, y, z - d / 2), new V3(x + w / 2, y + h, z + d / 2), { surface: 'concrete' });
       } catch (e) {}
     }
     return mesh;
   }
 
+  function container(group, x, z, rotY, kind, matName) {
+    var w = 2.44, d = 6.06, h = 2.59;
+    if (kind === '40') { d = 12.19; }
+    var body = addSolid(group, w, h, d, x, 0, z, matName || 'paint_blue');
+    body.rotation.y = rotY;
+    // 侧面瓦楞
+    var ribMat = nativeMat('steel_worn');
+    for (var i = -3; i <= 3; i++) {
+      var rib = new THREE.Mesh(new THREE.BoxGeometry(.05, h * .98, .07), ribMat || body.material);
+      rib.position.set(w / 2 + .02, h / 2, i * (d / 7));
+      body.add(rib);
+    }
+    // 门框
+    var frameMat = nativeMat('steel_dark');
+    var frame = new THREE.Mesh(new THREE.BoxGeometry(w + .04, h + .06, .06), frameMat || body.material);
+    frame.position.set(0, 0, d / 2 + .02);
+    body.add(frame);
+    return body;
+  }
+
   function buildDesert() {
     var g = new THREE.Group(); g.name = 'cx-map-desert';
     var C = 900, F = 900;
-    var floor = new THREE.Mesh(new THREE.BoxGeometry(200, .04, 200), mapMat(0xcbb083));
+    var floorMat = new THREE.MeshStandardMaterial({ color: 0xc9ac79, roughness: 1, metalness: 0 });
+    var floor = new THREE.Mesh(new THREE.BoxGeometry(200, .04, 200), floorMat);
     floor.position.set(C, .02, F); floor.receiveShadow = true; g.add(floor);
     try { G.physics.addBox(new V3(C - 100, -.04, F - 100), new V3(C + 100, .02, F + 100), { surface: 'sand' }); } catch (e) {}
-    // 外围沙墙
-    addSolid(g, 0, 200, 3.2, 1.2, C, 0, F - 98, 0xb99b6d);
-    addSolid(g, 0, 1.2, 3.2, 200, C - 98, 0, F, 0xb99b6d);
-    addSolid(g, 0, 1.2, 3.2, 200, C + 98, 0, F, 0xb99b6d);
-    // 中央哨塔
-    addSolid(g, 0, 7, 9, 7, C, 0, F, 0x9d8459);
-    addSolid(g, 0, 5, .7, 5, C, 9, F, 0x7d6a49, false);
-    var deck = new THREE.Mesh(new THREE.BoxGeometry(9.4, .18, 9.4), mapMat(0x8a7550));
-    deck.position.set(C, 9.1, F); g.add(deck);
-    try { G.physics.addBox(new V3(C - 4.7, 8.9, F - 4.7), new V3(C + 4.7, 9.1, F + 4.7), { surface: 'metal' }); } catch (e) {}
-    // 掩体墙
-    addSolid(g, 0, 9, 2.2, 1.0, C - 22, 0, F - 26, 0xa89068);
-    addSolid(g, 0, 1.0, 2.2, 9, C - 30, 0, F - 8, 0xa89068);
-    addSolid(g, 0, 10, 2.6, 1.1, C + 24, 0, F + 18, 0xa89068);
-    addSolid(g, 0, 1.1, 2.6, 8, C + 14, 0, F + 30, 0xa89068);
-    // 集装箱
-    [[C - 46, F - 40], [C - 46, F + 40], [C + 46, F - 40], [C + 46, F + 40]].forEach(function (p, i) {
-      addSolid(g, 0, 12, 3.4, 3.4, p[0], 0, p[1], i % 2 ? 0x8f6a45 : 0x5f6b58);
-    });
-    // 斜坡
-    for (var k = 0; k < 4; k++) {
-      var step = new THREE.Mesh(new THREE.BoxGeometry(6, .5, 3), mapMat(0xb39a72));
-      step.position.set(C + 18, .25 + k * .5, F - 20 - k * 2.6);
-      g.add(step);
-      try { G.physics.addBox(new V3(C + 15, k * .5, F - 21.5 - k * 2.6), new V3(C + 21, (k + 1) * .5, F - 18.5 - k * 2.6), { surface: 'concrete' }); } catch (e) {}
-    }
+
+    // 外围混凝土胸墙
+    addSolid(g, 200, 2.6, 1.0, C, 0, F - 98, 'concrete_dirty');
+    addSolid(g, 1.0, 2.6, 200, C - 98, 0, F, 'concrete_dirty');
+    addSolid(g, 1.0, 2.6, 200, C + 98, 0, F, 'concrete_dirty');
+
+    // 中央哨塔：混凝土基座 + 钢格栅上层
+    addSolid(g, 7, 8, 7, C, 0, F, 'concrete');
+    addSolid(g, 7.4, .3, 7.4, C, 8, F, 'steel_worn');
+    addSolid(g, 7, 2.2, .4, C, 8.3, F - 3.4, 'steel_galv', false);
+    addSolid(g, 7, 2.2, .4, C, 8.3, F + 3.4, 'steel_galv', false);
+    addSolid(g, .4, 2.2, 7, C - 3.4, 8.3, F, 'steel_galv', false);
+    addSolid(g, .4, 2.2, 7, C + 3.4, 8.3, F, 'steel_galv', false);
+    // 塔外挂梯
+    for (var k = 0; k < 9; k++) addSolid(g, 1.2, .08, .5, C - 4.2, .3 + k * .85, F, 'steel_worn', false);
+
+    // 沙袋掩体
+    addSolid(g, 8, 1.2, 1.4, C - 20, 0, F - 24, 'concrete_dirty');
+    addSolid(g, 1.4, 1.2, 8, C - 28, 0, F - 8, 'concrete_dirty');
+    addSolid(g, 8, 1.4, 1.2, C + 22, 0, F + 20, 'concrete_dirty');
+
+    // 集装箱群（自带锈蚀与喷漆材质）
+    container(g, C - 40, F - 34, 0, '40', 'paint_red');
+    container(g, C - 40, F - 21, 0, '20', 'paint_blue');
+    container(g, C + 40, F - 30, Math.PI / 2, '40', 'paint_green');
+    container(g, C + 46, F + 26, Math.PI / 2, '20', 'paint_orange');
+    container(g, C - 30, F + 40, 0, '40', 'steel_rust');
+    // 叠一层
+    var up = container(g, C - 40, F - 34, 0, '40', 'paint_teal');
+    up.position.y = 2.62;
+    try { G.physics.addBox(new V3(C - 41.2, 2.6, F - 40), new V3(C - 38.8, 5.2, F - 28), { surface: 'metal' }); } catch (e) {}
+
+    // 出生点前的近景掩体
+    addSolid(g, 1.0, 1.4, 6, C - 8, 0, F - 34, 'concrete_dirty');
+    addSolid(g, 6, 1.4, 1.0, C + 9, 0, F - 30, 'concrete_dirty');
+    container(g, C + 11, F - 38, 0, '20', 'paint_yellow');
+    container(g, C - 13, F - 40, .3, '20', 'paint_blue');
+    addSolid(g, 6, .5, 1.2, C + 1, 0, F - 26, 'steel_worn');
+    // 瞭望台
+    addSolid(g, 4, 5, 4, C + 30, 0, F + 36, 'concrete_dirty');
     return g;
   }
 
   function buildUrban() {
     var g = new THREE.Group(); g.name = 'cx-map-urban';
     var C = -900, F = 900;
-    var floor = new THREE.Mesh(new THREE.BoxGeometry(200, .04, 200), mapMat(0x3b3f43));
+    var floorMat = nativeMat('asphalt');
+    var floor = new THREE.Mesh(new THREE.BoxGeometry(200, .04, 200), floorMat || new THREE.MeshStandardMaterial({ color: 0x3a3e42 }));
     floor.position.set(C, .02, F); floor.receiveShadow = true; g.add(floor);
     try { G.physics.addBox(new V3(C - 100, -.04, F - 100), new V3(C + 100, .02, F + 100), { surface: 'concrete' }); } catch (e) {}
 
-    function block(cx, cz, bw, bd, h) {
-      addSolid(g, 0, bw, h, bd, cx, 0, cz, 0x2f343a);
-      // 窗带
-      var win = new THREE.Mesh(new THREE.BoxGeometry(bw - 1.2, .55, bd - 1.2),
-        new THREE.MeshBasicMaterial({ color: 0x8fb6c9, transparent: true, opacity: .35 }));
-      win.position.set(cx, h * .62, cz); g.add(win);
+    function building(cx, cz, bw, bd, floors, matName) {
+      var fh = 3.1;
+      for (var f = 0; f < floors; f++) {
+        addSolid(g, bw, fh, bd, cx, f * fh, cz, matName || 'concrete_dirty');
+        // 窗带
+        var winMat = nativeMat('glass_dirty');
+        var win = new THREE.Mesh(new THREE.BoxGeometry(bw - 1.0, .7, bd + .04), winMat || new THREE.MeshStandardMaterial({ color: 0x7e9aa8 }));
+        win.position.set(cx, f * fh + fh * .62, cz); g.add(win);
+        addSolid(g, bw + .3, .18, bd + .3, cx, (f + 1) * fh - .18, cz, 'steel_dark', false);
+      }
     }
-    // 街区网格：中间留出十字街道
-    var xs = [C - 60, C - 20, C + 26, C + 66], zs = [F - 62, F - 24, F + 22, F + 62];
-    for (var a = 0; a < xs.length; a++) for (var b = 0; b < zs.length; b++) {
-      if (a === 1 && b === 1) continue;
-      if (a === 2 && b === 2) continue;
-      block(xs[a], zs[b], 24, 24, 10 + ((a + b) % 3) * 4);
-    }
-    // 街口路障
-    addSolid(g, 0, 1.4, 1.5, 5, C, 0, F - 6, 0x5a6066);
-    addSolid(g, 0, 5, 1.5, 1.4, C - 8, 0, F + 12, 0x5a6066);
-    // 高架平台
-    addSolid(g, 0, 16, .6, 16, C + 30, 12, F, 0x3a4046);
+    // 六栋楼组成的街区
+    building(C - 62, F - 58, 30, 30, 3, 'concrete_painted');
+    building(C + 2, F - 58, 26, 30, 4, 'concrete_dirty');
+    building(C + 62, F - 58, 28, 30, 2, 'brick');
+    building(C - 62, F + 58, 30, 30, 2, 'brick');
+    building(C + 6, F + 58, 30, 30, 3, 'concrete_painted');
+    // 街口堆放集装箱
+    container(g, C - 18, F + 4, .2, '20', 'paint_blue');
+    container(g, C + 20, F - 6, -.15, '20', 'paint_red');
+    container(g, C + 24, F + 34, Math.PI / 2, '40', 'paint_green');
+
+    // 路障与路桩
+    for (var i = 0; i < 6; i++) addSolid(g, 1.2, 1.0, 1.2, C - 30 + i * 12, 0, F, 'concrete');
+    // 高架钢平台
+    addSolid(g, 18, .3, 12, C - 6, 6.2, F + 30, 'steel_worn', false);
+    addSolid(g, 1.0, 6.2, 1.0, C - 14, 0, F + 25, 'steel_galv');
+    addSolid(g, 1.0, 6.2, 1.0, C + 2, 0, F + 25, 'steel_galv');
     return g;
   }
 
@@ -7386,6 +7436,31 @@ errors ${window.__errors.length}${window.__errors.length?`
       ensureMap(id).visible = true;
       mapBoundsDone = true;
       try { G.physics.bounds.min.set(-3000, -40, -3000); G.physics.bounds.max.set(3000, 80, 3000); } catch (e) {}
+      try {
+        var sun = null;
+        G.scene.traverse(function (o) { if (o.isDirectionalLight && !sun) sun = o; });
+        if (sun) {
+          if (id === 'desert') {
+            sun.intensity = 11;
+            sun.position.set(40, 90, 30);
+            G.scene.fog = null;
+            try {
+              if (G.renderer) G.renderer.toneMappingExposure = 1.25;
+              if (!mapFill) {
+                mapFill = new THREE.HemisphereLight(0xfff2dc, 0xc9b491, 1.1);
+                mapFill.name = 'cx-map-fill';
+                G.scene.add(mapFill);
+              }
+              mapFill.visible = true;
+            } catch (e) {}
+          } else {
+            sun.intensity = 2.2;
+            sun.position.set(-30, 55, -20);
+            try { G.scene.fog = new THREE.FogExp2(0x0b1220, .012); } catch (e) {}
+            try { if (mapFill) mapFill.visible = false; if (G.renderer) G.renderer.toneMappingExposure = 1; } catch (e) {}
+          }
+        }
+      } catch (e) {}
       var st = MAPS[id].start;
       try {
         G.enemies.clear();
@@ -7494,49 +7569,139 @@ errors ${window.__errors.length}${window.__errors.length?`
     if (!vmGroup) return;
     var playing = G.game && G.game.state === 'playing' && G.player && G.player.alive !== false;
     var show = !cfg.tps && playing;
-    if (vmGroup.parent && vmGroup.parent.isObject3D) vmGroup.parent.visible = !!show;
+    vmGroup.visible = !!show;
     if (!show) return;
     showGunModel();
   }
 
   /* ------------------------------------------------------ 第三人称角色身体 */
-  function buildTpsBody() {
-    if (tpsBody || !G || !G.scene) return;
-    var grp = new THREE.Group(); grp.name = 'cx-tps-body';
-    var suit = new THREE.MeshStandardMaterial({ color: 0x3c4854, roughness: .88, metalness: .06 });
-    var gear = new THREE.MeshStandardMaterial({ color: 0x4d5965, roughness: .72 });
-    var visor = new THREE.MeshBasicMaterial({ color: 0xffb347 });
-    var torso = new THREE.Mesh(new THREE.BoxGeometry(.46, .6, .26), suit); torso.position.y = 1.1;
-    var head = new THREE.Mesh(new THREE.BoxGeometry(.23, .23, .23), gear); head.position.y = 1.55;
-    var face = new THREE.Mesh(new THREE.BoxGeometry(.19, .045, .02), visor); face.position.set(0, 1.55, -.125);
-    var hips = new THREE.Mesh(new THREE.BoxGeometry(.44, .22, .26), gear); hips.position.y = .72;
-    var legL = new THREE.Mesh(new THREE.BoxGeometry(.16, .62, .18), suit); legL.position.set(-.12, .32, 0);
-    var legR = new THREE.Mesh(new THREE.BoxGeometry(.16, .62, .18), suit); legR.position.set(.12, .32, 0);
-    var armL = new THREE.Mesh(new THREE.BoxGeometry(.12, .48, .14), suit); armL.position.set(-.28, 1.05, -.06); armL.rotation.x = -.5;
-    var armR = new THREE.Mesh(new THREE.BoxGeometry(.12, .48, .14), suit); armR.position.set(.28, 1.05, -.06); armR.rotation.x = -.5;
-    var gun = new THREE.Mesh(new THREE.BoxGeometry(.07, .09, .62), new THREE.MeshStandardMaterial({ color: 0x22272b, metalness: .5, roughness: .35 }));
-    gun.position.set(.22, .98, -.3);
-    var padL = new THREE.Mesh(new THREE.BoxGeometry(.16, .1, .22), gear); padL.position.set(-.24, 1.38, 0);
-    var padR = new THREE.Mesh(new THREE.BoxGeometry(.16, .1, .22), gear); padR.position.set(.24, 1.38, 0);
-    var pack = new THREE.Mesh(new THREE.BoxGeometry(.3, .34, .14), gear); pack.position.set(0, 1.18, .17);
-    grp.add(torso, head, face, hips, legL, legR, armL, armR, gun, padL, padR, pack);
-    grp.visible = false;
-    G.scene.add(grp);
-    tpsBody = grp;
+  var tpsRig = null, tpsPrevAmmo = 30, tpsKick = 0;
+
+  function limbGeo(r, len) {
+    if (THREE.CapsuleGeometry) return new THREE.CapsuleGeometry(r, len, 6, 10);
+    return new THREE.CylinderGeometry(r, r * .9, len, 10);
   }
 
-  function updateTpsBody() {
+  function buildTpsBody() {
+    if (tpsBody || !G || !G.scene) return;
+    var suit = new THREE.MeshStandardMaterial({ color: 0x46566a, roughness: .86, metalness: .05 });
+    var plate = new THREE.MeshStandardMaterial({ color: 0x5b6a7b, roughness: .7, metalness: .12 });
+    var dark = new THREE.MeshStandardMaterial({ color: 0x232a30, roughness: .8 });
+    var visor = new THREE.MeshBasicMaterial({ color: 0xffb347 });
+    var darkPants = new THREE.MeshStandardMaterial({ color: 0x2b3440, roughness: .9 });
+
+    var rig = {};
+    var root = new THREE.Group(); root.name = 'cx-tps-body';
+    var hips = new THREE.Group(); hips.position.y = .92; root.add(hips); rig.hips = hips;
+
+    var pelvis = new THREE.Mesh(new THREE.BoxGeometry(.36, .22, .26), suit); pelvis.position.y = 0; hips.add(pelvis);
+    var belt = new THREE.Mesh(new THREE.BoxGeometry(.38, .06, .28), dark); belt.position.y = .1; hips.add(belt);
+
+    var torso = new THREE.Group(); torso.position.y = .12; hips.add(torso); rig.torso = torso;
+    var chest = new THREE.Mesh(new THREE.BoxGeometry(.46, .48, .27), suit); chest.position.y = .24; torso.add(chest);
+    var vest = new THREE.Mesh(new THREE.BoxGeometry(.42, .3, .08), plate); vest.position.set(0, .26, -.15); torso.add(vest);
+    var pouches = new THREE.Mesh(new THREE.BoxGeometry(.3, .1, .06), dark); pouches.position.set(0, .1, -.16); torso.add(pouches);
+    var pack = new THREE.Mesh(new THREE.BoxGeometry(.34, .34, .16), plate); pack.position.set(0, .28, .16); torso.add(pack);
+
+    var neck = new THREE.Group(); neck.position.y = .5; torso.add(neck); rig.head = neck;
+    var headMesh = new THREE.Mesh(new THREE.BoxGeometry(.2, .21, .21), plate); headMesh.position.y = .1; neck.add(headMesh);
+    var helm = new THREE.Mesh(new THREE.BoxGeometry(.24, .12, .24), plate); helm.position.y = .2; neck.add(helm);
+    var visorMesh = new THREE.Mesh(new THREE.BoxGeometry(.18, .045, .02), visor); visorMesh.position.set(0, .1, -.12); neck.add(visorMesh);
+
+    function arm(side) {
+      var sh = new THREE.Group(); sh.position.set(side * .27, .44, 0); torso.add(sh);
+      var upper = new THREE.Mesh(limbGeo(.065, .26), suit); upper.position.y = -.14; sh.add(upper);
+      var elbow = new THREE.Group(); elbow.position.y = -.28; sh.add(elbow);
+      var fore = new THREE.Mesh(limbGeo(.055, .24), suit); fore.position.y = -.12; elbow.add(fore);
+      var hand = new THREE.Mesh(new THREE.BoxGeometry(.075, .1, .09), dark); hand.position.y = -.26; elbow.add(hand);
+      return { sh: sh, elbow: elbow };
+    }
+    var armR = arm(-1), armL = arm(1); rig.armR = armR; rig.armL = armL;
+
+    function leg(side) {
+      var hip = new THREE.Group(); hip.position.set(side * .12, -.02, 0); hips.add(hip);
+      var thigh = new THREE.Mesh(limbGeo(.085, .34), darkPants); thigh.position.y = -.23; hip.add(thigh);
+      var knee = new THREE.Group(); knee.position.y = -.46; hip.add(knee);
+      var shin = new THREE.Mesh(limbGeo(.068, .34), darkPants); shin.position.y = -.2; knee.add(shin);
+      var boot = new THREE.Mesh(new THREE.BoxGeometry(.13, .11, .26), dark); boot.position.set(0, -.4, -.04); knee.add(boot);
+      var pad = new THREE.Mesh(new THREE.BoxGeometry(.11, .12, .11), plate); pad.position.set(0, -.05, -.05); hip.add(pad);
+      return { hip: hip, knee: knee };
+    }
+    var legR = leg(-1), legL = leg(1); rig.legR = legR; rig.legL = legL;
+
+    var gun = new THREE.Mesh(new THREE.BoxGeometry(.06, .1, .66), new THREE.MeshStandardMaterial({ color: 0x22272b, metalness: .5, roughness: .35 }));
+    gun.position.set(0, -.24, -.26);
+    var scope = new THREE.Mesh(new THREE.BoxGeometry(.04, .04, .14), dark); scope.position.set(0, .02, -.12); gun.add(scope);
+
+    var gunMount = new THREE.Group(); gunMount.position.set(.02, .16, -.26); torso.add(gunMount);
+    gunMount.add(gun); rig.gun = gunMount;
+
+    root.visible = false;
+    G.scene.add(root);
+    tpsBody = root; tpsRig = rig;
+  }
+
+  function updateTpsBody(dt) {
+    if (!dt) dt = (G && G.time && G.time.dt) || 0.016;
     if (!G || !G.scene) return;
     buildTpsBody();
-    if (!tpsBody) return;
-    var on = cfg.tps && G.game && G.game.state === 'playing' && G.player.alive !== false;
+    if (!tpsBody || !tpsRig) return;
+    var P = G.player;
+    var on = cfg.tps && G.game && G.game.state === 'playing' && P.alive !== false;
     tpsBody.visible = !!on;
     if (!on) return;
-    var P = G.player;
+
     tpsBody.position.set(P.pos.x, P.pos.y, P.pos.z);
     tpsBody.rotation.y = P.yaw;
-    var crouch = P.crouching ? .72 : 1;
-    tpsBody.scale.set(1, crouch, 1);
+
+    var sp = Math.min(1.6, (P.speed || 0) / 4);
+    var ph = (G.time.t * 9) % (Math.PI * 2);
+    var swing = Math.sin(ph) * .55 * sp;
+    var ads = P.ads || 0;
+    var air = !P.onGround && Math.abs(P.vel ? P.vel.y : 0) > .2;
+    var crouch = P.crouching;
+
+    // 髋部高度：蹲下/跳跃收身
+    var baseY = crouch ? .6 : .92;
+    tpsRig.hips.position.y += ((baseY + (air ? .06 : 0)) - tpsRig.hips.position.y) * Math.min(1, dt * 12);
+
+    // 腿
+    tpsRig.legR.hip.rotation.x = air ? -.55 : (crouch ? -.95 : swing);
+    tpsRig.legL.hip.rotation.x = air ? -.95 : (crouch ? -.75 : -swing);
+    tpsRig.legR.knee.rotation.x = air ? .9 : (crouch ? 1.35 : Math.max(0, -swing) * .4);
+    tpsRig.legL.knee.rotation.x = air ? 1.2 : (crouch ? 1.1 : Math.max(0, swing) * .4);
+
+    // 躯干/头部
+    tpsRig.torso.rotation.x = air ? -.12 : (crouch ? -.25 : Math.sin(ph * 2) * .015 * sp);
+    tpsRig.head.rotation.x = (P.pitch || 0) * .55;
+
+    // 持枪姿态：腰射 vs 开镜
+    var armPitch = -(P.pitch || 0) + (ads ? -.15 : .12);
+    tpsRig.armR.sh.rotation.x = air ? -.55 : (ads ? -1.25 : -.95) + swing * .08;
+    tpsRig.armR.sh.rotation.z = ads ? .08 : .12;
+    tpsRig.armR.elbow.rotation.x = ads ? -.5 : -.95;
+    tpsRig.armL.sh.rotation.x = air ? -.7 : (ads ? -1.35 : -1.1) - swing * .06;
+    tpsRig.armL.sh.rotation.z = ads ? -.1 : -.32;
+    tpsRig.armL.elbow.rotation.x = ads ? -.7 : -1.05;
+
+    // 枪随俯仰
+    tpsRig.gun.rotation.x = armPitch;
+    if (ads) {
+      tpsRig.gun.position.set(.02, .16, -.3);
+      tpsRig.gun.rotation.x = -(P.pitch || 0);
+    } else {
+      tpsRig.gun.position.set(.02, .12, -.28);
+    }
+
+    // 开火后坐
+    var ammo = G.weapon && G.weapon.ammo;
+    if (typeof ammo === 'number' && ammo < tpsPrevAmmo) tpsKick = .18;
+    if (typeof ammo === 'number') tpsPrevAmmo = ammo;
+    if (tpsKick > 0) {
+      tpsKick = Math.max(0, tpsKick - dt * 1.4);
+      tpsRig.gun.position.z += tpsKick * .35;
+      tpsRig.torso.rotation.x -= tpsKick * .12;
+    }
   }
 
   /* --------------------------------------------------------- 局域网 50 杀对战 */
@@ -7789,7 +7954,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     G.weapon.update = function (dt) {
       try { preWeapon(); } catch (e) {}
       var r = wu.call(this, dt);
-      try { postWeapon(); } catch (e) {}
+      try { postWeapon(); } catch (e) { window.__postErr = (e && e.stack) || String(e); }
       return r;
     };
 
@@ -7805,6 +7970,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     if (cfg.map && cfg.map !== 'port') applyMap(cfg.map);
     setTimeout(injectGameSettings, 300);
     watch();
+    try { window.__cx = { cfg: cfg, applyMap: applyMap, inject: injectGameSettings }; } catch (e) {}
     console.log('[assist] v3 mounted');
   }
 
