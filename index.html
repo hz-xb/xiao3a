@@ -6231,14 +6231,13 @@ errors ${window.__errors.length}${window.__errors.length?`
   var origMoveCapsule = null, origShot = null, origRender = null;
   var baseTune = null;
   var renderHooked = false, lastDraw = 0, drawCount = 0, fpsT0 = 0;
-  var keyLayer = null, keyEdit = false;
   var pvp = null;
   var avatar = null;
   var lastEndless = 0, lastShotAt = -9;
 
   var cfg = {
     esp: false, espBox: true, espHp: true, espName: true, espLine: true, espDist: true,
-    track: true, part: 'head', range: 140, wallbang: true,
+    track: true, part: 'head', range: 140, wallbang: true, linePos: 'bottom',
     speed: 1, jump: 1, god: false, noclip: false, infAmmo: true, fly: false, spin: false,
     fps: 0, endless: false, keys: false,
     room: ''
@@ -6269,11 +6268,11 @@ errors ${window.__errors.length}${window.__errors.length?`
     '#cx-win{position:absolute;z-index:71;width:288px;display:none;color:#e8e4da;background:rgba(11,13,15,.93);' +
     'backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(232,228,218,.16);' +
     'box-shadow:0 18px 50px rgba(0,0,0,.6);font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;' +
-    'user-select:none;touch-action:none;max-height:calc(100vh - 72px);overflow-y:auto;overflow-x:hidden}' +
+    'user-select:none;touch-action:pan-y;overscroll-behavior:contain;max-height:calc(100vh - 72px);overflow-y:auto;overflow-x:hidden}' +
     '#cx-win.on{display:block}' +
     '#cx-win::-webkit-scrollbar{width:3px}#cx-win::-webkit-scrollbar-thumb{background:rgba(232,228,218,.25)}' +
     '.cx-head{display:flex;align-items:center;justify-content:space-between;padding:11px 12px 10px;' +
-    'border-bottom:1px solid rgba(232,228,218,.14);cursor:grab;position:sticky;top:0;background:rgba(11,13,15,.97);z-index:2}' +
+    'border-bottom:1px solid rgba(232,228,218,.14);cursor:grab;touch-action:none;position:sticky;top:0;background:rgba(11,13,15,.97);z-index:2}' +
     '.cx-head:active{cursor:grabbing}' +
     '.cx-head b{font:700 11px/1 "PingFang SC",sans-serif;letter-spacing:.28em;text-transform:uppercase}' +
     '.cx-head .sub{font:500 9px/1 ui-monospace,monospace;color:rgba(232,228,218,.45);margin-left:6px;letter-spacing:.04em}' +
@@ -6297,7 +6296,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     '.cx-sw i{position:absolute;left:2px;top:2px;width:12px;height:12px;background:rgba(232,228,218,.55);transition:all .16s}' +
     '.cx-sw[aria-pressed="true"]{background:rgba(255,179,71,.2);border-color:#ffb347}' +
     '.cx-sw[aria-pressed="true"] i{background:#ffb347;transform:translateX(16px)}' +
-    '.cx-seg{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}' +
+    '.cx-seg{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}' + '.cx-seg.g4{grid-template-columns:repeat(4,1fr)}' +
     '.cx-seg button,.cx-mini{border:1px solid rgba(232,228,218,.22);background:rgba(232,228,218,.05);color:rgba(232,228,218,.78);' +
     'font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.05em;padding:8px 2px;cursor:pointer}' +
     '.cx-seg button[aria-pressed="true"]{border-color:#ffb347;color:#ffb347;background:rgba(255,179,71,.14)}' +
@@ -6321,17 +6320,21 @@ errors ${window.__errors.length}${window.__errors.length?`
     '#cx-duel .hp{margin-top:6px;height:2px;background:rgba(232,228,218,.14)}' +
     '#cx-duel .hp i{display:block;height:2px;background:#ffb347;width:100%}' +
     '#cx-duel .nm{font:500 9px/1.5 ui-monospace,monospace;color:rgba(232,228,218,.45);margin-top:5px}' +
-    '#cx-keys{position:absolute;inset:0;z-index:50;display:none;pointer-events:none}' +
-    '#cx-keys.on{display:block}' +
-    '.cx-key{position:absolute;pointer-events:auto;border:1px solid rgba(232,228,218,.3);background:rgba(11,13,15,.55);' +
-    'color:#e8e4da;font:600 12px/1 "PingFang SC",sans-serif;letter-spacing:.08em;display:flex;align-items:center;justify-content:center;' +
-    'backdrop-filter:blur(6px);cursor:pointer;touch-action:none;user-select:none}' +
-    '.cx-key.hit{background:rgba(255,179,71,.22);border-color:#ffb347;color:#ffb347}' +
-    '#cx-keys.edit .cx-key{border-style:dashed;border-color:#ffb347}' +
-    '.cx-key .rs{position:absolute;right:-1px;bottom:-1px;width:14px;height:14px;display:none;background:#ffb347;opacity:.55;cursor:nwse-resize}' +
-    '#cx-keys.edit .cx-key .rs{display:block}' +
-    '.cx-kbtn{width:100%;margin-top:6px}' +
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     '.cx-warn{color:#ff7a5c;font:500 10px/1.5 "PingFang SC",sans-serif;margin-top:6px;display:none}' +
+    'html.cx-te .touch{display:block!important}' +
+    'html.cx-te .t-btn{outline:1px dashed #ffb347;outline-offset:2px;touch-action:none}' +
+    '.cx-trs{position:absolute;right:-3px;bottom:-3px;width:16px;height:16px;background:#ffb347;opacity:.65;border-radius:2px;display:none}' +
+    'html.cx-te .cx-trs{display:block}' +
     '.cx-warn.on{display:block}';
 
   function el(tag, cls, html) {
@@ -6365,7 +6368,10 @@ errors ${window.__errors.length}${window.__errors.length?`
       '<div class="cx-sec"><b>透视</b>' + line('总开关', 'esp') + '</div>' +
       '<div class="cx-sec"><b>显示内容</b>' +
       line('方框', 'espBox') + line('血量', 'espHp') + line('名字', 'espName') +
-      line('射线', 'espLine') + line('距离', 'espDist') + '</div>' +
+      line('射线', 'espLine') + line('距离', 'espDist') +
+      '<div class="cx-line"><label>射线起点</label><div class="cx-seg" id="cx-linepos" style="flex:1">' +
+      '<button data-lp="top">顶部</button><button data-lp="mid">中间</button><button data-lp="bottom">底部</button></div></div>' +
+      '</div>' +
       '<div class="cx-tip">总开关打开后，敌人、中继与远端玩家会叠加显示。</div></div>' +
 
       '<div class="cx-page" data-page="aim">' +
@@ -6390,11 +6396,8 @@ errors ${window.__errors.length}${window.__errors.length?`
 
       '<div class="cx-page" data-page="opt">' +
       '<div class="cx-sec"><b>画面</b>' +
-      '<div class="cx-line"><label>帧率上限</label><select class="cx-select" id="cx-fps">' +
-      '<option value="0">不限</option><option value="60">60</option><option value="90">90</option>' +
-      '<option value="120">120</option><option value="144">144</option><option value="165">165</option><option value="186">186</option>' +
-      '</select></div>' +
-      '<div class="cx-line"><label>实测</label><output id="cx-fps-v" style="font:600 11px ui-monospace;color:#ffb347">--</output></div></div>' +
+      '<div class="cx-line"><label>帧率</label><output id="cx-fps-v" style="font:600 11px ui-monospace;color:#ffb347">--</output></div>' +
+      '<div class="cx-tip">帧率保持系统上限（不锁定），锁定会拖慢逻辑帧。</div></div>' +
       '<div class="cx-sec"><b>模式</b>' + line('无尽围剿（额外刷怪）', 'endless') + '</div>' +
       '<div class="cx-sec"><b>局域网对战 · 50 杀</b>' +
       '<div class="cx-line"><label>房间号</label><input class="cx-input" id="cx-room" maxlength="6" placeholder="000000"></div>' +
@@ -6402,9 +6405,8 @@ errors ${window.__errors.length}${window.__errors.length?`
       '<button id="cx-auto" style="grid-column:1/-1">自动匹配（同网）</button></div>' +
       '<div class="cx-warn" id="cx-pvpmsg"></div>' +
       '<div class="cx-tip">两台设备填相同房间号；先拿 50 个人头者胜。需可访问外网信令服务。</div></div>' +
-      '<div class="cx-sec"><b>按键自定义</b>' + line('显示虚拟键位', 'keys') +
-      '<button class="cx-mini cx-kbtn" id="cx-kedit">进入键位编辑</button>' +
-      '<div class="cx-tip">编辑模式可拖动键位、拖右下角改大小，位置与尺寸自动保存。</div></div></div>' +
+      '<div class="cx-sec"><b>键位自定义</b>' + line('编辑游戏原生键位', 'keys') +
+      '<div class="cx-tip">开启后游戏原本的开火/瞄准/换弹/跳跃/交互/暂停键位会高亮，拖动可移位，拖右下角橙色方块可改大小，松开自动保存。</div></div></div>' +
 
       '<div class="cx-foot" id="cx-foot">弹药 --/-- · 敌人 0</div>';
     app.appendChild(panel);
@@ -6415,6 +6417,8 @@ errors ${window.__errors.length}${window.__errors.length?`
     fab.addEventListener('click', function (e) { e.stopPropagation(); show(true); });
     document.getElementById('cx-hide').addEventListener('click', function (e) { e.stopPropagation(); show(false); });
     panel.addEventListener('click', function (e) { e.stopPropagation(); });
+    panel.addEventListener('wheel', function (e) { e.stopPropagation(); }, { passive: true });
+    panel.addEventListener('touchmove', function (e) { e.stopPropagation(); }, { passive: true });
 
     [].forEach.call(panel.querySelectorAll('#cx-tabs button'), function (b) {
       b.addEventListener('click', function () {
@@ -6437,7 +6441,7 @@ errors ${window.__errors.length}${window.__errors.length?`
         var key = sw.getAttribute('data-k');
         cfg[key] = !cfg[key];
         sync(); save();
-        if (key === 'keys') buildKeys();
+        if (key === 'keys') setTouchEdit(cfg.keys);
         tip((cfg[key] ? '已开启 · ' : '已关闭 · ') + labelOf(key));
       });
     });
@@ -6447,21 +6451,20 @@ errors ${window.__errors.length}${window.__errors.length?`
     [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
       b.addEventListener('click', function () { gunIdx = +b.getAttribute('data-g'); applyGun(); sync(); save(); tip('枪械：' + GUNS[gunIdx].name); });
     });
+    [].forEach.call(panel.querySelectorAll('#cx-linepos button'), function (b) {
+      b.addEventListener('click', function () { cfg.linePos = b.getAttribute('data-lp'); sync(); save(); tip('射线起点：' + b.textContent); });
+    });
     sliders('cx-speed', 'speed', function (v) { return v.toFixed(2) + '×'; });
     sliders('cx-jump', 'jump', function (v) { return v.toFixed(2) + '×'; });
     sliders('cx-range', 'range', function (v) { return Math.round(v) + '°'; });
 
-    var fpsSel = document.getElementById('cx-fps');
-    fpsSel.addEventListener('change', function () { cfg.fps = +fpsSel.value; save(); tip('帧率上限：' + (cfg.fps || '不限')); });
 
     document.getElementById('cx-host').addEventListener('click', function () { pvpStart(true); });
     document.getElementById('cx-join').addEventListener('click', function () { pvpStart(false); });
     document.getElementById('cx-auto').addEventListener('click', function () { lanAuto(); });
     document.getElementById('cx-kedit').addEventListener('click', function () {
-      if (!cfg.keys) { cfg.keys = true; sync(); save(); buildKeys(); }
-      keyEdit = !keyEdit;
-      if (keyLayer) keyLayer.classList.toggle('edit', keyEdit);
-      tip(keyEdit ? '键位编辑：拖动 / 拖右下角缩放' : '键位布局已保存');
+      cfg.keys = !cfg.keys; sync(); save(); setTouchEdit(cfg.keys);
+      tip(cfg.keys ? '键位编辑：拖动键位 / 右下角改大小' : '键位布局已保存');
     });
 
     dragPanel();
@@ -6481,7 +6484,7 @@ errors ${window.__errors.length}${window.__errors.length?`
   var LAB = {
     esp: '透视', espBox: '方框', espHp: '血量', espName: '名字', espLine: '射线', espDist: '距离',
     track: '追踪', wallbang: '子弹穿墙', god: '无敌', noclip: '穿墙',
-    fly: '飞天', spin: '旋转', infAmmo: '无限子弹', endless: '无尽围剿', keys: '虚拟键位'
+    fly: '飞天', spin: '旋转', infAmmo: '无限子弹', endless: '无尽围剿', keys: '键位编辑'
   };
   function labelOf(k) { return LAB[k] || k; }
 
@@ -6507,9 +6510,11 @@ errors ${window.__errors.length}${window.__errors.length?`
     if (s1) { s1.value = cfg.speed; document.getElementById('cx-speed-v').textContent = (+cfg.speed).toFixed(2) + '×'; }
     if (s2) { s2.value = cfg.jump; document.getElementById('cx-jump-v').textContent = (+cfg.jump).toFixed(2) + '×'; }
     if (s3) { s3.value = cfg.range; document.getElementById('cx-range-v').textContent = Math.round(cfg.range) + '°'; }
-    var fs = document.getElementById('cx-fps'); if (fs) fs.value = String(cfg.fps);
+    [].forEach.call(document.querySelectorAll('#cx-linepos button'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-lp') === cfg.linePos ? 'true' : 'false');
+    });
     var rm = document.getElementById('cx-room'); if (rm && !rm.value) rm.value = cfg.room || '';
-    if (keyLayer) keyLayer.classList.toggle('on', !!cfg.keys);
+
   }
 
   function tip(text) {
@@ -6571,100 +6576,120 @@ errors ${window.__errors.length}${window.__errors.length?`
     head.addEventListener('pointercancel', end);
   }
 
-  /* -------------------------------------------------------------- 虚拟键位 */
-  var KEY_DEF = [
-    { id: 'fire', label: '开火', code: 'Enter', x: 90, y: 73, w: 64, h: 64 },
-    { id: 'jump', label: '跳跃', code: 'Space', x: 80, y: 86, w: 52, h: 52 },
-    { id: 'crouch', label: '蹲下', code: 'KeyC', x: 8, y: 82, w: 48, h: 48 },
-    { id: 'reload', label: '换弹', code: 'KeyR', x: 8, y: 69, w: 48, h: 48 },
-    { id: 'sprint', label: '冲刺', code: 'ShiftLeft', x: 18, y: 82, w: 48, h: 48 },
-    { id: 'melee', label: '近战', code: 'KeyF', x: 18, y: 69, w: 48, h: 48 }
-  ];
-  var keyLayout = null;
+  /* ---------------------------------------------------- 原生触屏键位编辑 */
+  var touchLayout = null, touchEdit = false, touchBound = false;
 
-  function loadLayout() {
-    try { keyLayout = JSON.parse(localStorage.getItem('xiaobing.assist.keys') || 'null'); } catch (e) {}
-    if (!keyLayout) {
-      keyLayout = {};
-      KEY_DEF.forEach(function (d) { keyLayout[d.id] = { x: d.x, y: d.y, w: d.w, h: d.h }; });
-    }
+  function loadTouchLayout() {
+    try { touchLayout = JSON.parse(localStorage.getItem('xiaobing.assist.touchlayout') || 'null'); } catch (e) {}
+    if (!touchLayout) touchLayout = {};
   }
-  function saveLayout() { try { localStorage.setItem('xiaobing.assist.keys', JSON.stringify(keyLayout)); } catch (e) {} }
-
-  function buildKeys() {
-    if (!cfg.keys && !keyLayer) return;
-    if (!keyLayer) {
-      keyLayer = el('div', ''); keyLayer.id = 'cx-keys';
-      document.getElementById('app').appendChild(keyLayer);
-      loadLayout();
-      KEY_DEF.forEach(function (d) { makeKey(d); });
-    }
-    keyLayer.classList.toggle('on', !!cfg.keys);
-    keyLayer.classList.toggle('edit', keyEdit);
+  function saveTouchLayout() {
+    try { localStorage.setItem('xiaobing.assist.touchlayout', JSON.stringify(touchLayout)); } catch (e) {}
   }
 
-  function makeKey(def) {
-    var pos = keyLayout[def.id] || { x: def.x, y: def.y, w: def.w, h: def.h };
-    var b = el('div', 'cx-key', def.label);
-    b.style.left = pos.x + '%';
-    b.style.top = pos.y + '%';
-    b.style.width = pos.w + 'px';
-    b.style.height = pos.h + 'px';
-    var rs = el('div', 'rs'); b.appendChild(rs);
-    keyLayer.appendChild(b);
+  function touchRoot() { return document.querySelector('.touch'); }
 
-    var held = null;
-    function press(e) {
-      e.preventDefault(); e.stopPropagation();
-      if (keyEdit) { startDrag(e, b, pos, false); return; }
-      held = def.code;
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: def.code, bubbles: true }));
-      b.classList.add('hit');
-    }
-    function release(e) {
-      if (keyEdit) return;
-      if (held) {
-        window.dispatchEvent(new KeyboardEvent('keyup', { code: held, bubbles: true }));
-        held = null;
+  function applyTouchLayout() {
+    var root = touchRoot();
+    if (!root) return false;
+    [].forEach.call(root.querySelectorAll('.t-btn'), function (b) {
+      var a = b.getAttribute('data-a'); if (!a) return;
+      var v = touchLayout[a]; if (!v) return;
+      b.style.right = 'auto'; b.style.bottom = 'auto';
+      b.style.left = v.x + '%'; b.style.top = v.y + '%';
+      b.style.width = v.w + 'px'; b.style.height = v.w + 'px';
+    });
+    return true;
+  }
+
+  function captureLayout(root) {
+    var W = window.innerWidth, H = window.innerHeight;
+    [].forEach.call(root.querySelectorAll('.t-btn'), function (b) {
+      var a = b.getAttribute('data-a'); if (!a) return;
+      var r = b.getBoundingClientRect();
+      if (r.width < 4) return;
+      touchLayout[a] = {
+        x: +(r.left / W * 100).toFixed(2),
+        y: +(r.top / H * 100).toFixed(2),
+        w: Math.round(r.width)
+      };
+    });
+    saveTouchLayout();
+  }
+
+  function bindTouchDrag(root) {
+    if (touchBound) return;
+    touchBound = true;
+    // 编辑时拦截游戏自身的触摸事件，避免误开火
+    ['touchstart', 'mousedown'].forEach(function (ev) {
+      root.addEventListener(ev, function (e) {
+        if (!touchEdit) return;
+        e.preventDefault(); e.stopImmediatePropagation();
+      }, { capture: true, passive: false });
+    });
+    [].forEach.call(root.querySelectorAll('.t-btn'), function (b) {
+      var a = b.getAttribute('data-a'); if (!a) return;
+      var trs = el('i', 'cx-trs'); b.appendChild(trs);
+      var drag = null;
+      function start(e, resize) {
+        if (!touchEdit) return;
+        e.preventDefault(); e.stopPropagation();
+        var r = b.getBoundingClientRect();
+        drag = { x: e.clientX, y: e.clientY, l: r.left, t: r.top, w: r.width, resize: resize };
+        try { b.setPointerCapture(e.pointerId); } catch (er) {}
       }
-      b.classList.remove('hit');
-    }
-    b.addEventListener('pointerdown', press);
-    b.addEventListener('pointerup', release);
-    b.addEventListener('pointercancel', release);
-    b.addEventListener('pointerleave', release);
-    rs.addEventListener('pointerdown', function (e) {
-      e.preventDefault(); e.stopPropagation();
-      startDrag(e, b, pos, true);
+      b.addEventListener('pointerdown', function (e) { if (e.target === trs) return; start(e, false); });
+      trs.addEventListener('pointerdown', function (e) { start(e, true); });
+      b.addEventListener('pointermove', function (e) {
+        if (!drag) return;
+        e.preventDefault(); e.stopPropagation();
+        var W = window.innerWidth, H = window.innerHeight;
+        if (drag.resize) {
+          var w = Math.max(34, drag.w + (e.clientX - drag.x));
+          touchLayout[a].w = Math.round(w);
+          b.style.width = w + 'px'; b.style.height = w + 'px';
+          b.style.left = drag.l / W * 100 + '%';
+          b.style.top = drag.t / H * 100 + '%';
+        } else {
+          var l = Math.max(0, Math.min(W - drag.w, drag.l + e.clientX - drag.x));
+          var t = Math.max(0, Math.min(H - drag.w, drag.t + e.clientY - drag.y));
+          b.style.left = (l / W * 100) + '%';
+          b.style.top = (t / H * 100) + '%';
+        }
+      });
+      var up = function () {
+        if (!drag) return;
+        drag = null;
+        var r = b.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
+        touchLayout[a] = { x: +(r.left / W * 100).toFixed(2), y: +(r.top / H * 100).toFixed(2), w: Math.round(r.width) };
+        saveTouchLayout();
+      };
+      b.addEventListener('pointerup', up);
+      b.addEventListener('pointercancel', up);
     });
   }
 
-  function startDrag(e, node, pos, resize) {
-    var x0 = e.clientX, y0 = e.clientY, w0 = node.offsetWidth, h0 = node.offsetHeight;
-    var l0 = parseFloat(node.style.left), t0 = parseFloat(node.style.top);
-    var W = keyLayer.clientWidth || window.innerWidth, H = keyLayer.clientHeight || window.innerHeight;
-    function move(ev) {
-      if (resize) {
-        pos.w = Math.max(30, w0 + ev.clientX - x0);
-        pos.h = Math.max(30, h0 + ev.clientY - y0);
-        node.style.width = pos.w + 'px';
-        node.style.height = pos.h + 'px';
-      } else {
-        pos.x = Math.max(0, Math.min(100, l0 + (ev.clientX - x0) / W * 100));
-        pos.y = Math.max(0, Math.min(96, t0 + (ev.clientY - y0) / H * 100));
-        node.style.left = pos.x + '%';
-        node.style.top = pos.y + '%';
-      }
+  function setTouchEdit(on) {
+    touchEdit = !!on;
+    document.documentElement.classList.toggle('cx-te', touchEdit);
+    var root = touchRoot();
+    if (!root) {
+      if (touchEdit) tip('先进入触屏操作（点一下屏幕），再开键位编辑');
+      return;
     }
-    function up() {
-      document.removeEventListener('pointermove', move);
-      document.removeEventListener('pointerup', up);
-      saveLayout();
-    }
-    document.addEventListener('pointermove', move);
-    document.addEventListener('pointerup', up);
+    loadTouchLayout();
+    if (!Object.keys(touchLayout).length) captureLayout(root);
+    applyTouchLayout();
+    bindTouchDrag(root);
   }
 
+  // 触屏层是懒加载的，出现后补一次布局
+  var touchWatch = setInterval(function () {
+    var root = touchRoot();
+    if (!root) return;
+    if (!touchBound) { loadTouchLayout(); if (applyTouchLayout()) bindTouchDrag(root); }
+    if (touchEdit) applyTouchLayout();
+  }, 1200);
   /* ---------------------------------------------------------------- ESP 层 */
   function buildCanvas() {
     if (esp) return;
@@ -6720,7 +6745,8 @@ errors ${window.__errors.length}${window.__errors.length?`
 
       if (cfg.espLine) {
         ctx.strokeStyle = col; ctx.globalAlpha = .32; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(w / 2, h * .92); ctx.lineTo(x, y); ctx.stroke();
+        var ly = cfg.linePos === 'top' ? 0 : (cfg.linePos === 'mid' ? h * .5 : h * .92);
+        ctx.beginPath(); ctx.moveTo(w / 2, ly); ctx.lineTo(x, y); ctx.stroke();
         ctx.globalAlpha = 1;
       }
       if (cfg.espBox) {
@@ -6822,9 +6848,26 @@ errors ${window.__errors.length}${window.__errors.length?`
       if (cos < cosLim) continue;
       if (!losOK(origin, p)) continue;
       var sc = (1 - cos) * 100 + len * .06;
-      if (sc < bestScore) { bestScore = sc; best = p; }
+      if (sc < bestScore) { bestScore = sc; best = { point: p, en: en, part: partPick === 'head' ? 'weak' : 'body' }; }
     }
     return best;
+  }
+
+  function directHit(origin, aim, dir, opts, mult) {
+    var g = getGun();
+    var dmg = ((opts && opts.damage) || 28) * (aim.part === 'weak' ? 2.2 : 1);
+    var killed = false;
+    try { killed = aim.en.damage(dmg, aim.point, dir, aim.part) === true; } catch (e) {}
+    if (G.combat.stats) { G.combat.stats.shots++; G.combat.stats.hits++; if (killed) G.combat.stats.kills++; }
+    var f = {
+      point: aim.point.clone(), normal: dir.clone().negate(), dist: aim.point.distanceTo(origin),
+      surface: 'enemy', enemy: aim.en, part: aim.part, dir: dir, from: 'player', killed: killed
+    };
+    try {
+      G.events.emit('impact', f);
+      G.events.emit('player:hitEnemy', { enemy: aim.en, part: aim.part, killed: killed, weak: aim.part === 'weak' });
+    } catch (e) {}
+    return f;
   }
 
   /* ---------------------------------------------------------------- 游戏钩子 */
@@ -6847,7 +6890,15 @@ errors ${window.__errors.length}${window.__errors.length?`
           if (pvp && pvp.active) pvpShootTest(origin, dir);
           if (cfg.track) {
             var aim = homingTarget(origin);
-            if (aim) dir = aim.clone().sub(origin).normalize();
+            if (aim) {
+              dir = aim.point.clone().sub(origin).normalize();
+              if (cfg.wallbang) {
+                var wall = null;
+                try { wall = G.physics.raycast(origin, dir, 320); } catch (er) {}
+                var ep = aim.point.distanceTo(origin);
+                if (wall && wall.dist < ep - .2) return directHit(origin, aim, dir, opts);
+              }
+            }
           }
         }
       } catch (e) {}
@@ -6924,19 +6975,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     }
   }
 
-  function applyFps() {
-    if (!G || !G.renderer || renderHooked) return;
-    origRender = G.renderer.render;
-    G.renderer.render = function (scene, camera) {
-      if (cfg.fps) {
-        var now = performance.now(), iv = 1000 / cfg.fps;
-        if (now - lastDraw < iv - 1) return;
-        lastDraw = now;
-      }
-      return origRender.apply(this, arguments);
-    };
-    renderHooked = true;
-  }
+  function applyFps() { /* 帧率不再锁定，交给系统上限 */ }
 
   /* ------------------------------------------------------------- 无尽围剿 */
   function tickEndless() {
@@ -7212,6 +7251,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     buildUI();
     applyFps();
     if (G.game && G.game.state === 'playing') { show(true); lastState = 'playing'; }
+    if (cfg.keys) setTouchEdit(true);
     watch();
     console.log('[assist] v3 mounted');
   }
@@ -7237,7 +7277,7 @@ errors ${window.__errors.length}${window.__errors.length?`
           f.textContent = '弹药 ' + G.weapon.ammo + '/' + G.weapon.reserve + ' · 敌人 ' + alive + ' · ' + getGun().name;
         }
       }
-      if (keyLayer) keyLayer.classList.toggle('on', !!cfg.keys);
+  
     }, 320);
 
     setInterval(function () {
