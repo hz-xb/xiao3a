@@ -6964,7 +6964,7 @@ errors ${window.__errors.length}${window.__errors.length?`
               }
               // 命中校验：高速飞行的无人机常常一个逻辑帧就飘出弱点球，这里回退到躯干并重新解算
               if (!verifyShot(origin, dir, aim.en)) {
-                var bp = pickPoint(aim.en, 'body');
+                var bp = aim.en.pos.clone(); bp.y += aim.en.type === 'hound' ? .9 : .1;
                 var bd = bp.clone().sub(origin).normalize();
                 if (verifyShot(origin, bd, aim.en)) { dir = bd; aim.part = 'body'; aim.point = bp; }
               }
