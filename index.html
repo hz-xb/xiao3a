@@ -6210,5 +6210,529 @@ errors ${window.__errors.length}${window.__errors.length?`
 
 </script>
 
+<!-- ASSIST-TERMINAL : 自建单机调试悬浮窗（F8 开关） -->
+<script>
+/* ============================================================================
+   小冰 · 辅助悬浮窗 (Assist HUD)
+   本地单机调试模块，挂载在游戏自带的 window.__G 运行时上下文：
+     __G.player   pos / eye / yaw / pitch / vel / onGround / tuning(移动调参) / addRecoil
+     __G.weapon   ammo / magSize / reserve / update
+     __G.enemies  list（gull 飞鸥 / hound 猎犬，headPos = 头部弱点）
+     __G.combat   playerShot(origin, dir, {damage, range}) 射线结算
+     __G.physics  lineOfSight
+   只做运行时增强，不改游戏源码逻辑。
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  var G = null, THREE = null, V3 = null;
+  var hooked = false;
+  var esp = null, ctx = null, dpr = 1;
+  var panel = null, head = null, fab = null;
+  var lastState = '';
+
+  var cfg = {
+    speed: 1.0,        // 移速倍率 1.0 - 3.0
+    jump: 1.0,         // 跳跃倍率 1.0 - 3.5
+    infAmmo: true,
+    infLife: false,
+    homing: true,
+    esp: false,
+    gun: 0             // 枪械预设索引
+  };
+
+  // 枪械预设：伤害倍率 / 弹匣 / 备弹 / 开火间隔（基准 720rpm ≈ 0.083s）
+  var GUNS = [
+    { name: '制式步枪', dmg: 1.0, mag: 30, reserve: 150, gap: 0.083, kick: 0.0 },
+    { name: '速射', dmg: 0.7, mag: 60, reserve: 400, gap: 0.055, kick: 0.0 },
+    { name: '重击', dmg: 5.5, mag: 10, reserve: 60, gap: 0.40, kick: 0.0 },
+    { name: '激光', dmg: 2.4, mag: 45, reserve: 400, gap: 0.070, kick: 0.0 }
+  ];
+
+  var baseTune = null;   // 原始移动参数
+  var lastShotAt = -9;
+  var wasGround = true;
+
+  var LS_KEY = 'xiaobing.assist.v2';
+  try {
+    var saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    for (var k in saved) if (k in cfg) cfg[k] = saved[k];
+  } catch (e) {}
+  function save() {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
+  }
+
+  /* ------------------------------------------------------------------ 样式 */
+  var CSS =
+    '#cx-fab{position:absolute;left:var(--gl);bottom:calc(96px + var(--sab));z-index:70;' +
+    'width:50px;height:40px;border:1px solid rgba(232,228,218,.35);background:rgba(11,13,15,.62);' +
+    'color:#e8e4da;font:600 11px/1.1 "PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.14em;' +
+    'cursor:pointer;-webkit-appearance:none;appearance:none;padding:0;text-align:center;' +
+    'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}' +
+    '#cx-fab:after{content:"";position:absolute;left:8px;right:8px;bottom:7px;height:1px;background:#ffb347;opacity:.6}' +
+    '#cx-win{position:absolute;z-index:71;width:250px;display:none;color:#e8e4da;' +
+    'background:rgba(11,13,15,.9);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);' +
+    'border:1px solid rgba(232,228,218,.16);box-shadow:0 16px 44px rgba(0,0,0,.55);' +
+    'font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;' +
+    'padding:0 0 8px;user-select:none;touch-action:none;max-height:calc(100vh - 120px);overflow-y:auto}' +
+    '#cx-win.on{display:block}' +
+    '#cx-win .cx-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 9px;' +
+    'border-bottom:1px solid rgba(232,228,218,.14);cursor:grab}' +
+    '#cx-win .cx-head:active{cursor:grabbing}' +
+    '#cx-win .cx-head b{font:700 10px/1 "PingFang SC",sans-serif;letter-spacing:.3em;text-transform:uppercase;color:#e8e4da}' +
+    '#cx-win .cx-head span{font:500 9px/1 ui-monospace,monospace;letter-spacing:.06em;color:rgba(232,228,218,.5);margin-left:6px}' +
+    '#cx-win .cx-close{width:22px;height:22px;border:0;background:transparent;color:rgba(232,228,218,.65);' +
+    'font:400 15px/20px sans-serif;cursor:pointer;padding:0}' +
+    '#cx-win .cx-close:hover{color:#ffb347}' +
+    '#cx-win .cx-body{padding:10px 12px 0}' +
+    '.cx-sec{margin-bottom:10px}' +
+    '.cx-sec>b{display:block;font:600 9px/1 "PingFang SC",sans-serif;letter-spacing:.24em;text-transform:uppercase;' +
+    'color:#ffb347;margin:0 0 8px;opacity:.85}' +
+    '.cx-line{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:22px;margin:6px 0}' +
+    '.cx-line label{font:500 12px/1.2 "PingFang SC",sans-serif;letter-spacing:.03em;color:rgba(232,228,218,.9)}' +
+    '.cx-range{display:flex;align-items:center;gap:8px}' +
+    '.cx-range output{width:34px;text-align:right;font:600 11px/1 ui-monospace,monospace;color:#ffb347}' +
+    '.cx-range input{width:118px;height:2px;-webkit-appearance:none;appearance:none;background:#2a2f33;outline:none}' +
+    '.cx-range input::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;background:#ffb347;cursor:pointer}' +
+    '.cx-sw{position:relative;flex:none;width:34px;height:18px;border:1px solid rgba(232,228,218,.3);' +
+    'background:rgba(232,228,218,.06);cursor:pointer;padding:0}' +
+    '.cx-sw i{position:absolute;left:2px;top:2px;width:12px;height:12px;background:rgba(232,228,218,.55);transition:all .16s}' +
+    '.cx-sw[aria-pressed="true"]{background:rgba(255,179,71,.2);border-color:#ffb347}' +
+    '.cx-sw[aria-pressed="true"] i{background:#ffb347;transform:translateX(16px)}' +
+    '.cx-guns{display:grid;grid-template-columns:1fr 1fr;gap:4px}' +
+    '.cx-guns button{border:1px solid rgba(232,228,218,.22);background:rgba(232,228,218,.05);color:rgba(232,228,218,.78);' +
+    'font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.06em;padding:8px 0;cursor:pointer}' +
+    '.cx-guns button[aria-pressed="true"]{border-color:#ffb347;color:#ffb347;background:rgba(255,179,71,.14)}' +
+    '#cx-win .cx-foot{padding:8px 12px 0;border-top:1px solid rgba(232,228,218,.12);margin-top:2px;' +
+    'font:500 9px/1.7 ui-monospace,monospace;color:rgba(232,228,218,.5);letter-spacing:.04em}' +
+    '#cx-win .cx-tip{font:400 9px/1.55 "PingFang SC",sans-serif;color:rgba(232,228,218,.34);margin-top:4px}' +
+    '.cx-toast{position:absolute;left:50%;top:16%;transform:translateX(-50%);z-index:72;' +
+    'padding:8px 14px;background:rgba(11,13,15,.8);border-left:2px solid #ffb347;color:#e8e4da;' +
+    'font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.14em;opacity:0;transition:opacity .2s;pointer-events:none}' +
+    '.cx-toast.on{opacity:1}';
+
+  function el(tag, cls, html) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html != null) n.innerHTML = html;
+    return n;
+  }
+
+  /* ------------------------------------------------------------------ 悬浮窗 */
+  function buildUI() {
+    if (document.getElementById('cx-fab')) return;
+    var st = el('style');
+    st.textContent = CSS;
+    document.head.appendChild(st);
+    var app = document.getElementById('app');
+
+    fab = el('button', '', '辅助');
+    fab.id = 'cx-fab';
+    fab.type = 'button';
+    app.appendChild(fab);
+
+    panel = el('div', '', '');
+    panel.id = 'cx-win';
+    panel.innerHTML =
+      '<div class="cx-head" id="cx-drag">' +
+      '<div><b>辅助终端</b><span>ASSIST</span></div>' +
+      '<button class="cx-close" id="cx-hide" title="隐藏">—</button>' +
+      '</div>' +
+      '<div class="cx-body">' +
+      '<div class="cx-sec"><b>移动</b>' +
+      '<div class="cx-line"><label>人物移速</label><div class="cx-range">' +
+      '<input id="cx-speed" type="range" min="1" max="3" step="0.05"><output id="cx-speed-v">1.0×</output></div></div>' +
+      '<div class="cx-line"><label>跳跃高度</label><div class="cx-range">' +
+      '<input id="cx-jump" type="range" min="1" max="3.5" step="0.05"><output id="cx-jump-v">1.0×</output></div></div>' +
+      '</div>' +
+      '<div class="cx-sec"><b>战斗</b>' +
+      '<div class="cx-line"><label>无限子弹</label><button class="cx-sw" data-k="infAmmo" aria-pressed="false"><i></i></button></div>' +
+      '<div class="cx-line"><label>无限生命</label><button class="cx-sw" data-k="infLife" aria-pressed="false"><i></i></button></div>' +
+      '<div class="cx-line"><label>子弹追踪</label><button class="cx-sw" data-k="homing" aria-pressed="false"><i></i></button></div>' +
+      '<div class="cx-line"><label>敌人透视</label><button class="cx-sw" data-k="esp" aria-pressed="false"><i></i></button></div>' +
+      '</div>' +
+      '<div class="cx-sec"><b>枪械</b><div class="cx-guns" id="cx-guns">' +
+      GUNS.map(function (g, i) {
+        return '<button data-g="' + i + '" aria-pressed="false">' + g.name + '</button>';
+      }).join('') +
+      '</div></div>' +
+      '</div>' +
+      '<div class="cx-foot" id="cx-foot">弹药 --/-- · 敌人 0</div>' +
+      '<div class="cx-tip">拖动标题栏移动 · F8 显示/隐藏 · 鼠标被锁定时可先按 Esc</div>';
+    app.appendChild(panel);
+
+    var toast = el('div', 'cx-toast');
+    toast.id = 'cx-toast';
+    app.appendChild(toast);
+
+    fab.addEventListener('click', function (e) {
+      e.stopPropagation();
+      show(true);
+    });
+    document.getElementById('cx-hide').addEventListener('click', function (e) {
+      e.stopPropagation();
+      show(false);
+    });
+    panel.addEventListener('click', function (e) { e.stopPropagation(); });
+
+    // 开关
+    [].forEach.call(panel.querySelectorAll('.cx-sw[data-k]'), function (sw) {
+      sw.addEventListener('click', function () {
+        var key = sw.getAttribute('data-k');
+        cfg[key] = !cfg[key];
+        sync();
+        save();
+        tip((cfg[key] ? '已开启 ' : '已关闭 ') + ({
+          infAmmo: '无限子弹', infLife: '无限生命', homing: '子弹追踪', esp: '敌人透视'
+        }[key] || key));
+      });
+    });
+    // 枪械
+    [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
+      b.addEventListener('click', function () {
+        cfg.gun = +b.getAttribute('data-g');
+        applyGun();
+        sync(); save();
+        tip('切换：' + GUNS[cfg.gun].name);
+      });
+    });
+    // 滑条
+    var sp = document.getElementById('cx-speed'), jp = document.getElementById('cx-jump');
+    sp.addEventListener('input', function () { cfg.speed = +sp.value; sync(); save(); });
+    jp.addEventListener('input', function () { cfg.jump = +jp.value; sync(); save(); });
+
+    // 拖动
+    var drag = document.getElementById('cx-drag');
+    var dx = 0, dy = 0, dragging = false, sx = 0, sy = 0, px = 0, py = 0;
+    drag.addEventListener('pointerdown', function (e) {
+      if (e.target.closest('button')) return;
+      dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      var r = panel.getBoundingClientRect();
+      px = r.left; py = r.top;
+      try { drag.setPointerCapture(e.pointerId); } catch (er) {}
+      e.preventDefault();
+    });
+    drag.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      dx = px + (e.clientX - sx);
+      dy = py + (e.clientY - sy);
+      place(dx, dy);
+    });
+    var endDrag = function (e) {
+      if (!dragging) return;
+      dragging = false;
+      try { drag.releasePointerCapture(e.pointerId); } catch (er) {}
+      savePos();
+    };
+    drag.addEventListener('pointerup', endDrag);
+    drag.addEventListener('pointercancel', endDrag);
+
+    // 记忆位置
+    try {
+      var pos = JSON.parse(localStorage.getItem('xiaobing.assist.pos') || 'null');
+      if (pos) place(pos.x, pos.y);
+      else { place(null, Math.max(56, Math.round(window.innerHeight * 0.28)), 16); }
+    } catch (e) { place(null, 120, 16); }
+
+    addEventListener('keydown', function (e) {
+      if (e.code === 'F8' || e.code === 'Insert') {
+        e.preventDefault();
+        show(!panel.classList.contains('on'));
+      }
+    });
+    sync();
+  }
+
+  function place(x, y, rightOff) {
+    if (!panel) return;
+    var w = panel.offsetWidth || 250, h = panel.offsetHeight || 300;
+    if (x == null) {
+      panel.style.left = 'auto';
+      panel.style.right = (rightOff != null ? rightOff : 16) + 'px';
+      panel.style.top = Math.max(56, Math.min(window.innerHeight - h - 8, y || 120)) + 'px';
+      return;
+    }
+    panel.style.right = 'auto';
+    var maxX = window.innerWidth - w - 6, maxY = window.innerHeight - h - 6;
+    panel.style.left = Math.max(6, Math.min(maxX, x)) + 'px';
+    panel.style.top = Math.max(6, Math.min(maxY, y)) + 'px';
+  }
+
+  function savePos() {
+    try {
+      var r = panel.getBoundingClientRect();
+      localStorage.setItem('xiaobing.assist.pos', JSON.stringify({ x: r.left, y: r.top }));
+    } catch (e) {}
+  }
+
+  function show(on) {
+    if (!panel) return;
+    panel.classList.toggle('on', !!on);
+    fab.style.display = on ? 'none' : 'block';
+  }
+
+  function tip(text) {
+    var t = document.getElementById('cx-toast');
+    if (!t) return;
+    t.textContent = text;
+    t.classList.add('on');
+    clearTimeout(tip._t);
+    tip._t = setTimeout(function () { t.classList.remove('on'); }, 1100);
+  }
+
+  function sync() {
+    if (!panel) return;
+    [].forEach.call(panel.querySelectorAll('.cx-sw[data-k]'), function (sw) {
+      var key = sw.getAttribute('data-k');
+      sw.setAttribute('aria-pressed', cfg[key] ? 'true' : 'false');
+    });
+    var s = document.getElementById('cx-speed'), j = document.getElementById('cx-jump');
+    if (s) { s.value = cfg.speed; document.getElementById('cx-speed-v').textContent = (+cfg.speed).toFixed(2) + '×'; }
+    if (j) { j.value = cfg.jump; document.getElementById('cx-jump-v').textContent = (+cfg.jump).toFixed(2) + '×'; }
+    [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
+      b.setAttribute('aria-pressed', +b.getAttribute('data-g') === cfg.gun ? 'true' : 'false');
+    });
+  }
+
+  /* ---------------------------------------------------------------- ESP 画布 */
+  function buildCanvas() {
+    if (esp) return;
+    esp = document.createElement('canvas');
+    esp.id = 'cx-esp';
+    esp.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;z-index:25;pointer-events:none;display:none';
+    document.getElementById('app').appendChild(esp);
+    ctx = esp.getContext('2d');
+  }
+
+  function resize() {
+    if (!esp) return;
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    var w = esp.clientWidth || window.innerWidth, h = esp.clientHeight || window.innerHeight;
+    if (esp.width !== Math.round(w * dpr)) esp.width = Math.round(w * dpr);
+    if (esp.height !== Math.round(h * dpr)) esp.height = Math.round(h * dpr);
+    return { w: w, h: h };
+  }
+
+  function drawESP() {
+    if (!esp || !G || !G.camera) return;
+    var playing = G.game && G.game.state === 'playing';
+    if (!playing || !cfg.esp) { esp.style.display = 'none'; return; }
+    esp.style.display = 'block';
+    var sz = resize(), w = sz.w, h = sz.h, cam = G.camera;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    var list = (G.enemies && G.enemies.list) || [];
+    var fs = Math.max(10, Math.round(w / 120));
+    for (var i = 0; i < list.length; i++) {
+      var en = list[i];
+      if (!en || !en.alive || !en.pos) continue;
+      var hp = en.pos.clone(); if (en.type === 'hound') hp.y += 1.35;
+      var v = hp.project(cam);
+      var dist = en.pos.distanceTo(cam.position);
+      var col = en.type === 'hound' ? '#ff5a40' : '#ffb347';
+      if (v.z < 1) {
+        var x = (v.x * .5 + .5) * w, y = (-v.y * .5 + .5) * h;
+        if (x > -30 && x < w + 30 && y > -30 && y < h + 30) {
+          var hgt = Math.min(h * .75, (h / 2) / (Math.max(1, dist) * Math.tan(cam.fov * Math.PI / 360)) * (en.type === 'hound' ? 1.7 : .7));
+          hgt = Math.max(18, hgt);
+          var wid = hgt * .42;
+          ctx.strokeStyle = col;
+          ctx.globalAlpha = .8;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x - wid / 2, y - hgt, wid, hgt);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = col;
+          ctx.font = '600 ' + fs + 'px "PingFang SC",sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText((en.type === 'hound' ? '猎犬 ' : '飞鸥 ') + Math.round(dist) + 'm', x, y - hgt - 5);
+          // 血条
+          var maxHp = en.type === 'hound' ? 140 : 45;
+          var bw = Math.max(30, wid);
+          ctx.fillStyle = 'rgba(11,13,15,.7)';
+          ctx.fillRect(x - bw / 2, y - hgt - 3, bw, 3);
+          ctx.fillStyle = (en.hp / maxHp < .4) ? '#ff5a40' : col;
+          ctx.fillRect(x - bw / 2, y - hgt - 3, bw * Math.max(0, Math.min(1, en.hp / maxHp)), 3);
+        }
+      }
+    }
+  }
+
+  /* ---------------------------------------------------------------- 游戏钩子 */
+  function getGun() { return GUNS[cfg.gun] || GUNS[0]; }
+
+  function nearestHead(origin) {
+    var list = (G.enemies && G.enemies.list) || [];
+    var best = null, bestD = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var en = list[i];
+      if (!en || !en.alive || !en.pos) continue;
+      var p = en.headPos ? en.headPos.clone() : en.pos.clone();
+      if (!en.headPos) p.y += (en.type === 'hound' ? 1.35 : 0.05);
+      var d = p.distanceTo(origin);
+      if (d < 1 || d > 180) continue;
+      var los = true;
+      try { los = !G.physics || G.physics.lineOfSight(origin, p); } catch (e) { los = true; }
+      if (!los) continue;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+
+  function hookShot() {
+    var orig = G.combat.playerShot;
+    G.combat.playerShot = function (origin, dir, opts) {
+      var gun = getGun();
+      try {
+        if (origin && G.player && origin.distanceTo(G.player.eye) < 1.2) {
+          lastShotAt = G.time ? G.time.t : 0;
+        }
+        if (cfg.homing && origin && G.player && origin.distanceTo(G.player.eye) < 1.2) {
+          var aim = nearestHead(origin);
+          if (aim) {
+            dir = aim.clone().sub(origin).normalize();
+          } else {
+            dir = G.camera ? G.camera.getWorldDirection(new V3()) : dir;
+          }
+        }
+      } catch (e) {}
+      if (opts) opts = Object.assign({}, opts, { damage: (opts.damage || 28) * gun.dmg });
+      return orig.call(this, origin, dir, opts);
+    };
+  }
+
+  function applyGun() {
+    if (!G || !G.weapon) return;
+    var w = G.weapon, gun = getGun();
+    w.magSize = gun.mag;
+    w.ammo = Math.min(w.ammo, gun.mag);
+    w.reserve = Math.max(w.reserve, gun.reserve);
+  }
+
+  function playerFrame(dt, P) {
+    // 移速：直接改 player.tuning，游戏每帧读取
+    if (baseTune && P.tuning) {
+      P.tuning.walk = baseTune.walk * cfg.speed;
+      P.tuning.sprint = baseTune.sprint * cfg.speed;
+    }
+  }
+
+  function postPlayer(dt, P, wasOnGround) {
+    // 高跳：起跳瞬间放大上升速度
+    if (wasOnGround && !P.onGround && P.vel && P.vel.y > 0 && cfg.jump > 1.0) {
+      P.vel.y *= cfg.jump;
+    }
+  }
+
+  function preWeapon(dt) {
+    if (!G) return;
+    var P = G.player, W = G.weapon;
+    if (!P || !W) return;
+
+    if (cfg.infLife) {
+      P.invulnerable = true;
+      if (P.health < P.maxHealth) P.health = P.maxHealth;
+    } else {
+      P.invulnerable = false;
+    }
+    if (cfg.infAmmo) {
+      W.ammo = W.magSize;
+      W.reserve = Math.max(W.reserve || 0, 300);
+    }
+
+    // 枪械射速门槛：重击/激光限制连发
+    var gun = getGun();
+    if (G.input && G.input.fire) {
+      var t = G.time ? G.time.t : 0;
+      if (t - lastShotAt < gun.gap - 0.004) {
+        G.input.fire = false;
+      }
+    }
+  }
+
+  function attach() {
+    if (hooked) return;
+    G = window.__G;
+    if (!G || !G.player || !G.weapon || !G.combat || !G.camera) return;
+    THREE = G.THREE;
+    V3 = THREE && THREE.Vector3;
+    if (!V3) return;
+    hooked = true;
+
+    // 原始移动参数
+    var T = G.player.tuning;
+    if (T && T.walk != null && T.sprint != null) {
+      baseTune = { walk: T.walk, sprint: T.sprint, crouch: T.crouch };
+    }
+
+    hookShot();
+    applyGun();
+
+    // 玩家 update：前调移速，后判高跳
+    var pu = G.player.update;
+    G.player.update = function (dt) {
+      try { playerFrame(dt, this); } catch (e) {}
+      var was = this.onGround;
+      var r = pu.call(this, dt);
+      try { postPlayer(dt, this, was); } catch (e) {}
+      return r;
+    };
+
+    // 武器 update：帧前增强 + 帧后补弹/画 ESP
+    var wu = G.weapon.update;
+    G.weapon.update = function (dt) {
+      try { preWeapon(dt); } catch (e) {}
+      var r = wu.call(this, dt);
+      try {
+        if (cfg.infAmmo) {
+          G.weapon.ammo = G.weapon.magSize;
+          G.weapon.reserve = Math.max(G.weapon.reserve || 0, 300);
+        }
+        drawESP();
+      } catch (e) {}
+      return r;
+    };
+
+    buildCanvas();
+    buildUI();
+    watchState();
+    console.log('[assist] 已挂载');
+  }
+
+  function watchState() {
+    setInterval(function () {
+      if (!G || !G.game || !panel) return;
+      var st = G.game.state;
+      if (st === 'playing' && lastState !== 'playing') show(true);
+      if (st !== 'playing' && st !== 'paused') show(false);
+      lastState = st;
+    }, 260);
+
+    setInterval(function () {
+      if (!G || !G.weapon || !panel || !panel.classList.contains('on')) return;
+      var f = document.getElementById('cx-foot');
+      if (!f) return;
+      var alive = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
+      var w = G.weapon;
+      f.textContent = '弹药 ' + (w.ammo != null ? w.ammo : '--') + '/' +
+        (w.reserve != null ? w.reserve : '--') + ' · 敌人 ' + alive + ' · ' + getGun().name;
+    }, 300);
+  }
+
+  var timer = setInterval(function () {
+    try { attach(); } catch (e) { console.warn('[assist] attach', e); }
+    if (hooked) clearInterval(timer);
+  }, 120);
+  setTimeout(function () { try { attach(); } catch (e) {} }, 1600);
+
+  addEventListener('resize', function () {
+    if (!panel || !panel.classList.contains('on')) return;
+    var r = panel.getBoundingClientRect();
+    place(r.left, r.top);
+  });
+})();
+
+</script>
+
 </body>
 </html>
