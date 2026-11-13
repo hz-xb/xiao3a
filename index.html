@@ -6210,17 +6210,14 @@ errors ${window.__errors.length}${window.__errors.length?`
 
 </script>
 
-<!-- ASSIST-TERMINAL : 自建单机调试悬浮窗（F8 开关） -->
+<!-- ASSIST-TERMINAL v3 -->
 <script>
 /* ============================================================================
-   小冰 · 辅助悬浮窗 (Assist HUD)
-   本地单机调试模块，挂载在游戏自带的 window.__G 运行时上下文：
-     __G.player   pos / eye / yaw / pitch / vel / onGround / tuning(移动调参) / addRecoil
-     __G.weapon   ammo / magSize / reserve / update
-     __G.enemies  list（gull 飞鸥 / hound 猎犬，headPos = 头部弱点）
-     __G.combat   playerShot(origin, dir, {damage, range}) 射线结算
-     __G.physics  lineOfSight
-   只做运行时增强，不改游戏源码逻辑。
+   小冰3A · 辅助终端 v3
+   单机调试 / 练习模块，运行在游戏自带的 window.__G 上下文：
+     player(位置/视线/朝向/速度/移动调参)、weapon(弹药)、enemies(敌人表)、
+     combat.playerShot(即时射线命中)、physics(射线/可见性/胶囊碰撞)、scene/camera
+   分页：透视 / 追踪 / 内存 / 玩法（帧率、无尽、局域网50杀、虚拟键位）
    ========================================================================== */
 (function () {
   'use strict';
@@ -6228,88 +6225,114 @@ errors ${window.__errors.length}${window.__errors.length?`
   var G = null, THREE = null, V3 = null;
   var hooked = false;
   var esp = null, ctx = null, dpr = 1;
-  var panel = null, head = null, fab = null;
+  var panel = null, fab = null, toastEl = null;
+  var tab = 'esp';
   var lastState = '';
+  var origMoveCapsule = null, origShot = null, origRender = null;
+  var baseTune = null;
+  var renderHooked = false, lastDraw = 0, drawCount = 0, fpsT0 = 0;
+  var keyLayer = null, keyEdit = false;
+  var pvp = null;
+  var avatar = null;
+  var lastEndless = 0, lastShotAt = -9;
 
   var cfg = {
-    speed: 1.0,        // 移速倍率 1.0 - 3.0
-    jump: 1.0,         // 跳跃倍率 1.0 - 3.5
-    infAmmo: true,
-    infLife: false,
-    homing: true,
-    esp: false,
-    gun: 0             // 枪械预设索引
+    esp: false, espBox: true, espHp: true, espName: true, espLine: true, espDist: true,
+    track: true, part: 'head', range: 140, wallbang: true,
+    speed: 1, jump: 1, god: false, noclip: false, infAmmo: true, fly: false, spin: false,
+    fps: 0, endless: false, keys: false,
+    room: ''
   };
+  var gunIdx = 0;
 
-  // 枪械预设：伤害倍率 / 弹匣 / 备弹 / 开火间隔（基准 720rpm ≈ 0.083s）
   var GUNS = [
-    { name: '制式步枪', dmg: 1.0, mag: 30, reserve: 150, gap: 0.083, kick: 0.0 },
-    { name: '速射', dmg: 0.7, mag: 60, reserve: 400, gap: 0.055, kick: 0.0 },
-    { name: '重击', dmg: 5.5, mag: 10, reserve: 60, gap: 0.40, kick: 0.0 },
-    { name: '激光', dmg: 2.4, mag: 45, reserve: 400, gap: 0.070, kick: 0.0 }
+    { name: '制式步枪', dmg: 1, mag: 30, reserve: 150, gap: 0.083 },
+    { name: '速射', dmg: .7, mag: 60, reserve: 400, gap: .055 },
+    { name: '重击', dmg: 5.5, mag: 10, reserve: 60, gap: .4 },
+    { name: '激光', dmg: 2.4, mag: 45, reserve: 400, gap: .07 }
   ];
 
-  var baseTune = null;   // 原始移动参数
-  var lastShotAt = -9;
-  var wasGround = true;
-
-  var LS_KEY = 'xiaobing.assist.v2';
+  var LS = 'xiaobing.assist.v3';
   try {
-    var saved = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+    var saved = JSON.parse(localStorage.getItem(LS) || '{}');
     for (var k in saved) if (k in cfg) cfg[k] = saved[k];
   } catch (e) {}
-  function save() {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) {}
-  }
+  function save() { try { localStorage.setItem(LS, JSON.stringify(cfg)); } catch (e) {} }
 
-  /* ------------------------------------------------------------------ 样式 */
+  /* ------------------------------------------------------------------- CSS */
   var CSS =
-    '#cx-fab{position:absolute;left:var(--gl);bottom:calc(96px + var(--sab));z-index:70;' +
-    'width:50px;height:40px;border:1px solid rgba(232,228,218,.35);background:rgba(11,13,15,.62);' +
-    'color:#e8e4da;font:600 11px/1.1 "PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.14em;' +
-    'cursor:pointer;-webkit-appearance:none;appearance:none;padding:0;text-align:center;' +
-    'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}' +
+    '#cx-fab{position:absolute;left:var(--gl);bottom:calc(96px + var(--sab));z-index:70;width:52px;height:40px;' +
+    'border:1px solid rgba(232,228,218,.35);background:rgba(11,13,15,.62);color:#e8e4da;' +
+    'font:600 11px/1.1 "PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.14em;cursor:pointer;' +
+    'padding:0;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}' +
     '#cx-fab:after{content:"";position:absolute;left:8px;right:8px;bottom:7px;height:1px;background:#ffb347;opacity:.6}' +
-    '#cx-win{position:absolute;z-index:71;width:250px;display:none;color:#e8e4da;' +
-    'background:rgba(11,13,15,.9);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);' +
-    'border:1px solid rgba(232,228,218,.16);box-shadow:0 16px 44px rgba(0,0,0,.55);' +
-    'font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;' +
-    'padding:0 0 8px;user-select:none;touch-action:none;max-height:calc(100vh - 120px);overflow-y:auto}' +
+    '#cx-win{position:absolute;z-index:71;width:288px;display:none;color:#e8e4da;background:rgba(11,13,15,.93);' +
+    'backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(232,228,218,.16);' +
+    'box-shadow:0 18px 50px rgba(0,0,0,.6);font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;' +
+    'user-select:none;touch-action:none;max-height:calc(100vh - 72px);overflow-y:auto;overflow-x:hidden}' +
     '#cx-win.on{display:block}' +
-    '#cx-win .cx-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 9px;' +
-    'border-bottom:1px solid rgba(232,228,218,.14);cursor:grab}' +
-    '#cx-win .cx-head:active{cursor:grabbing}' +
-    '#cx-win .cx-head b{font:700 10px/1 "PingFang SC",sans-serif;letter-spacing:.3em;text-transform:uppercase;color:#e8e4da}' +
-    '#cx-win .cx-head span{font:500 9px/1 ui-monospace,monospace;letter-spacing:.06em;color:rgba(232,228,218,.5);margin-left:6px}' +
-    '#cx-win .cx-close{width:22px;height:22px;border:0;background:transparent;color:rgba(232,228,218,.65);' +
-    'font:400 15px/20px sans-serif;cursor:pointer;padding:0}' +
-    '#cx-win .cx-close:hover{color:#ffb347}' +
-    '#cx-win .cx-body{padding:10px 12px 0}' +
-    '.cx-sec{margin-bottom:10px}' +
-    '.cx-sec>b{display:block;font:600 9px/1 "PingFang SC",sans-serif;letter-spacing:.24em;text-transform:uppercase;' +
-    'color:#ffb347;margin:0 0 8px;opacity:.85}' +
-    '.cx-line{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:22px;margin:6px 0}' +
-    '.cx-line label{font:500 12px/1.2 "PingFang SC",sans-serif;letter-spacing:.03em;color:rgba(232,228,218,.9)}' +
+    '#cx-win::-webkit-scrollbar{width:3px}#cx-win::-webkit-scrollbar-thumb{background:rgba(232,228,218,.25)}' +
+    '.cx-head{display:flex;align-items:center;justify-content:space-between;padding:11px 12px 10px;' +
+    'border-bottom:1px solid rgba(232,228,218,.14);cursor:grab;position:sticky;top:0;background:rgba(11,13,15,.97);z-index:2}' +
+    '.cx-head:active{cursor:grabbing}' +
+    '.cx-head b{font:700 11px/1 "PingFang SC",sans-serif;letter-spacing:.28em;text-transform:uppercase}' +
+    '.cx-head .sub{font:500 9px/1 ui-monospace,monospace;color:rgba(232,228,218,.45);margin-left:6px;letter-spacing:.04em}' +
+    '.cx-head button{width:22px;height:22px;border:0;background:transparent;color:rgba(232,228,218,.6);font:400 15px/20px sans-serif;cursor:pointer;padding:0}' +
+    '.cx-head button:hover{color:#ffb347}' +
+    '.cx-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:2px;padding:8px 10px 0}' +
+    '.cx-tabs button{border:0;border-bottom:2px solid transparent;background:transparent;color:rgba(232,228,218,.5);' +
+    'font:600 10px/1 "PingFang SC",sans-serif;letter-spacing:.14em;padding:8px 0 7px;cursor:pointer}' +
+    '.cx-tabs button[aria-selected="true"]{color:#ffb347;border-bottom-color:#ffb347}' +
+    '.cx-page{display:none;padding:10px 12px 4px}.cx-page.on{display:block}' +
+    '.cx-sec{margin:0 0 12px}' +
+    '.cx-sec>b{display:block;font:600 9px/1 "PingFang SC",sans-serif;letter-spacing:.22em;color:#ffb347;margin:0 0 9px;opacity:.9}' +
+    '.cx-line{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:24px;margin:7px 0}' +
+    '.cx-line label{font:500 12px/1.2 "PingFang SC",sans-serif;letter-spacing:.03em;color:rgba(232,228,218,.92)}' +
     '.cx-range{display:flex;align-items:center;gap:8px}' +
-    '.cx-range output{width:34px;text-align:right;font:600 11px/1 ui-monospace,monospace;color:#ffb347}' +
-    '.cx-range input{width:118px;height:2px;-webkit-appearance:none;appearance:none;background:#2a2f33;outline:none}' +
-    '.cx-range input::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;background:#ffb347;cursor:pointer}' +
-    '.cx-sw{position:relative;flex:none;width:34px;height:18px;border:1px solid rgba(232,228,218,.3);' +
-    'background:rgba(232,228,218,.06);cursor:pointer;padding:0}' +
+    '.cx-range output{width:42px;text-align:right;font:600 11px/1 ui-monospace,monospace;color:#ffb347}' +
+    'input[type=range]{-webkit-appearance:none;appearance:none;height:2px;background:#2a2f33;outline:none}' +
+    '.cx-range input{width:110px}' +
+    'input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;background:#ffb347;cursor:pointer}' +
+    '.cx-sw{position:relative;flex:none;width:34px;height:18px;border:1px solid rgba(232,228,218,.3);background:rgba(232,228,218,.06);cursor:pointer;padding:0}' +
     '.cx-sw i{position:absolute;left:2px;top:2px;width:12px;height:12px;background:rgba(232,228,218,.55);transition:all .16s}' +
     '.cx-sw[aria-pressed="true"]{background:rgba(255,179,71,.2);border-color:#ffb347}' +
     '.cx-sw[aria-pressed="true"] i{background:#ffb347;transform:translateX(16px)}' +
-    '.cx-guns{display:grid;grid-template-columns:1fr 1fr;gap:4px}' +
-    '.cx-guns button{border:1px solid rgba(232,228,218,.22);background:rgba(232,228,218,.05);color:rgba(232,228,218,.78);' +
-    'font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.06em;padding:8px 0;cursor:pointer}' +
-    '.cx-guns button[aria-pressed="true"]{border-color:#ffb347;color:#ffb347;background:rgba(255,179,71,.14)}' +
-    '#cx-win .cx-foot{padding:8px 12px 0;border-top:1px solid rgba(232,228,218,.12);margin-top:2px;' +
-    'font:500 9px/1.7 ui-monospace,monospace;color:rgba(232,228,218,.5);letter-spacing:.04em}' +
-    '#cx-win .cx-tip{font:400 9px/1.55 "PingFang SC",sans-serif;color:rgba(232,228,218,.34);margin-top:4px}' +
-    '.cx-toast{position:absolute;left:50%;top:16%;transform:translateX(-50%);z-index:72;' +
-    'padding:8px 14px;background:rgba(11,13,15,.8);border-left:2px solid #ffb347;color:#e8e4da;' +
-    'font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.14em;opacity:0;transition:opacity .2s;pointer-events:none}' +
-    '.cx-toast.on{opacity:1}';
+    '.cx-seg{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}' +
+    '.cx-seg button,.cx-mini{border:1px solid rgba(232,228,218,.22);background:rgba(232,228,218,.05);color:rgba(232,228,218,.78);' +
+    'font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.05em;padding:8px 2px;cursor:pointer}' +
+    '.cx-seg button[aria-pressed="true"]{border-color:#ffb347;color:#ffb347;background:rgba(255,179,71,.14)}' +
+    '.cx-select{background:#151a1d;color:#e8e4da;border:1px solid rgba(232,228,218,.25);font:600 11px/1 ui-monospace,monospace;padding:6px 8px;outline:none}' +
+    '.cx-input{background:#151a1d;color:#e8e4da;border:1px solid rgba(232,228,218,.25);font:600 11px/1 ui-monospace,monospace;padding:7px 8px;width:96px;outline:none;letter-spacing:.12em}' +
+    '.cx-btnrow{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:6px}' +
+    '.cx-btnrow button{border:1px solid rgba(232,228,218,.28);background:rgba(232,228,218,.06);color:#e8e4da;font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.1em;padding:9px 0;cursor:pointer}' +
+    '.cx-btnrow button:hover{border-color:#ffb347;color:#ffb347}' +
+    '.cx-foot{padding:9px 12px 10px;border-top:1px solid rgba(232,228,218,.12);font:500 9px/1.8 ui-monospace,monospace;color:rgba(232,228,218,.5);letter-spacing:.04em}' +
+    '.cx-tip{font:400 9px/1.5 "PingFang SC",sans-serif;color:rgba(232,228,218,.32);margin-top:5px}' +
+    '.cx-toast{position:absolute;left:50%;top:15%;transform:translateX(-50%);z-index:72;padding:8px 14px;background:rgba(11,13,15,.82);' +
+    'border-left:2px solid #ffb347;color:#e8e4da;font:600 11px/1 "PingFang SC",sans-serif;letter-spacing:.12em;opacity:0;transition:opacity .2s;pointer-events:none}' +
+    '.cx-toast.on{opacity:1}' +
+    '#cx-duel{position:absolute;left:50%;top:calc(56px + var(--sat));transform:translateX(-50%);z-index:45;display:none;' +
+    'min-width:252px;padding:8px 16px;background:rgba(11,13,15,.66);border:1px solid rgba(232,228,218,.16);' +
+    'border-left:2px solid #ffb347;color:#e8e4da;font-family:"PingFang SC",sans-serif;text-align:center;backdrop-filter:blur(8px)}' +
+    '#cx-duel.on{display:block}' +
+    '#cx-duel .sc{display:flex;align-items:center;justify-content:center;gap:12px;font:700 15px/1 ui-monospace,monospace;letter-spacing:.1em}' +
+    '#cx-duel .sc span{color:rgba(232,228,218,.6);font-size:10px;letter-spacing:.2em}' +
+    '#cx-duel .sc b{color:#ffb347}' +
+    '#cx-duel .hp{margin-top:6px;height:2px;background:rgba(232,228,218,.14)}' +
+    '#cx-duel .hp i{display:block;height:2px;background:#ffb347;width:100%}' +
+    '#cx-duel .nm{font:500 9px/1.5 ui-monospace,monospace;color:rgba(232,228,218,.45);margin-top:5px}' +
+    '#cx-keys{position:absolute;inset:0;z-index:50;display:none;pointer-events:none}' +
+    '#cx-keys.on{display:block}' +
+    '.cx-key{position:absolute;pointer-events:auto;border:1px solid rgba(232,228,218,.3);background:rgba(11,13,15,.55);' +
+    'color:#e8e4da;font:600 12px/1 "PingFang SC",sans-serif;letter-spacing:.08em;display:flex;align-items:center;justify-content:center;' +
+    'backdrop-filter:blur(6px);cursor:pointer;touch-action:none;user-select:none}' +
+    '.cx-key.hit{background:rgba(255,179,71,.22);border-color:#ffb347;color:#ffb347}' +
+    '#cx-keys.edit .cx-key{border-style:dashed;border-color:#ffb347}' +
+    '.cx-key .rs{position:absolute;right:-1px;bottom:-1px;width:14px;height:14px;display:none;background:#ffb347;opacity:.55;cursor:nwse-resize}' +
+    '#cx-keys.edit .cx-key .rs{display:block}' +
+    '.cx-kbtn{width:100%;margin-top:6px}' +
+    '.cx-warn{color:#ff7a5c;font:500 10px/1.5 "PingFang SC",sans-serif;margin-top:6px;display:none}' +
+    '.cx-warn.on{display:block}';
 
   function el(tag, cls, html) {
     var n = document.createElement(tag);
@@ -6318,152 +6341,183 @@ errors ${window.__errors.length}${window.__errors.length?`
     return n;
   }
 
-  /* ------------------------------------------------------------------ 悬浮窗 */
+  /* --------------------------------------------------------------------- UI */
   function buildUI() {
     if (document.getElementById('cx-fab')) return;
-    var st = el('style');
-    st.textContent = CSS;
-    document.head.appendChild(st);
+    var style = el('style'); style.textContent = CSS; document.head.appendChild(style);
     var app = document.getElementById('app');
 
-    fab = el('button', '', '辅助');
-    fab.id = 'cx-fab';
-    fab.type = 'button';
+    fab = el('button', '', '辅<br>助'); fab.id = 'cx-fab'; fab.type = 'button';
     app.appendChild(fab);
 
     panel = el('div', '', '');
     panel.id = 'cx-win';
     panel.innerHTML =
-      '<div class="cx-head" id="cx-drag">' +
-      '<div><b>辅助终端</b><span>ASSIST</span></div>' +
-      '<button class="cx-close" id="cx-hide" title="隐藏">—</button>' +
-      '</div>' +
-      '<div class="cx-body">' +
-      '<div class="cx-sec"><b>移动</b>' +
-      '<div class="cx-line"><label>人物移速</label><div class="cx-range">' +
-      '<input id="cx-speed" type="range" min="1" max="3" step="0.05"><output id="cx-speed-v">1.0×</output></div></div>' +
-      '<div class="cx-line"><label>跳跃高度</label><div class="cx-range">' +
-      '<input id="cx-jump" type="range" min="1" max="3.5" step="0.05"><output id="cx-jump-v">1.0×</output></div></div>' +
-      '</div>' +
-      '<div class="cx-sec"><b>战斗</b>' +
-      '<div class="cx-line"><label>无限子弹</label><button class="cx-sw" data-k="infAmmo" aria-pressed="false"><i></i></button></div>' +
-      '<div class="cx-line"><label>无限生命</label><button class="cx-sw" data-k="infLife" aria-pressed="false"><i></i></button></div>' +
-      '<div class="cx-line"><label>子弹追踪</label><button class="cx-sw" data-k="homing" aria-pressed="false"><i></i></button></div>' +
-      '<div class="cx-line"><label>敌人透视</label><button class="cx-sw" data-k="esp" aria-pressed="false"><i></i></button></div>' +
-      '</div>' +
-      '<div class="cx-sec"><b>枪械</b><div class="cx-guns" id="cx-guns">' +
-      GUNS.map(function (g, i) {
-        return '<button data-g="' + i + '" aria-pressed="false">' + g.name + '</button>';
-      }).join('') +
+      '<div class="cx-head" id="cx-drag"><div><b>辅助终端</b><span class="sub">ASSIST v3</span></div>' +
+      '<button id="cx-hide" title="收起">—</button></div>' +
+      '<div class="cx-tabs" id="cx-tabs">' +
+      '<button data-tab="esp" aria-selected="true">透视</button>' +
+      '<button data-tab="aim" aria-selected="false">追踪</button>' +
+      '<button data-tab="mem" aria-selected="false">内存</button>' +
+      '<button data-tab="opt" aria-selected="false">玩法</button></div>' +
+
+      '<div class="cx-page on" data-page="esp">' +
+      '<div class="cx-sec"><b>透视</b>' + line('总开关', 'esp') + '</div>' +
+      '<div class="cx-sec"><b>显示内容</b>' +
+      line('方框', 'espBox') + line('血量', 'espHp') + line('名字', 'espName') +
+      line('射线', 'espLine') + line('距离', 'espDist') + '</div>' +
+      '<div class="cx-tip">总开关打开后，敌人、中继与远端玩家会叠加显示。</div></div>' +
+
+      '<div class="cx-page" data-page="aim">' +
+      '<div class="cx-sec"><b>追踪</b>' + line('总开关', 'track') + '</div>' +
+      '<div class="cx-sec"><b>追踪部位</b><div class="cx-seg" id="cx-part">' +
+      '<button data-part="head">头部</button><button data-part="body">胸部</button><button data-part="auto">自动</button></div></div>' +
+      '<div class="cx-sec"><b>追踪范围</b>' +
+      '<div class="cx-line"><label>角度锥</label><div class="cx-range"><input id="cx-range" type="range" min="10" max="180" step="5"><output id="cx-range-v">140°</output></div></div>' +
+      line('子弹穿墙', 'wallbang') + '</div>' +
+      '<div class="cx-tip">开火瞬间把弹道折向范围内目标的指定部位，穿墙时无视遮挡。</div></div>' +
+
+      '<div class="cx-page" data-page="mem">' +
+      '<div class="cx-sec"><b>人物</b>' +
+      '<div class="cx-line"><label>移动速度</label><div class="cx-range"><input id="cx-speed" type="range" min="1" max="5" step="0.05"><output id="cx-speed-v">1.00×</output></div></div>' +
+      '<div class="cx-line"><label>跳跃高度</label><div class="cx-range"><input id="cx-jump" type="range" min="1" max="4" step="0.05"><output id="cx-jump-v">1.00×</output></div></div>' +
+      line('无敌', 'god') + line('穿墙', 'noclip') + line('飞天（跳/蹲升降）', 'fly') + line('自动旋转', 'spin') + '</div>' +
+      '<div class="cx-sec"><b>武器</b>' + line('无限子弹', 'infAmmo') +
+      '<div class="cx-seg" id="cx-guns">' +
+      GUNS.map(function (g, i) { return '<button data-g="' + i + '">' + g.name + '</button>'; }).join('') +
       '</div></div>' +
-      '</div>' +
-      '<div class="cx-foot" id="cx-foot">弹药 --/-- · 敌人 0</div>' +
-      '<div class="cx-tip">拖动标题栏移动 · F8 显示/隐藏 · 鼠标被锁定时可先按 Esc</div>';
+      '<div class="cx-tip">飞天需同时开启穿墙；旋转按固定角速度自转视角。</div></div>' +
+
+      '<div class="cx-page" data-page="opt">' +
+      '<div class="cx-sec"><b>画面</b>' +
+      '<div class="cx-line"><label>帧率上限</label><select class="cx-select" id="cx-fps">' +
+      '<option value="0">不限</option><option value="60">60</option><option value="90">90</option>' +
+      '<option value="120">120</option><option value="144">144</option><option value="165">165</option><option value="186">186</option>' +
+      '</select></div>' +
+      '<div class="cx-line"><label>实测</label><output id="cx-fps-v" style="font:600 11px ui-monospace;color:#ffb347">--</output></div></div>' +
+      '<div class="cx-sec"><b>模式</b>' + line('无尽围剿（额外刷怪）', 'endless') + '</div>' +
+      '<div class="cx-sec"><b>局域网对战 · 50 杀</b>' +
+      '<div class="cx-line"><label>房间号</label><input class="cx-input" id="cx-room" maxlength="6" placeholder="000000"></div>' +
+      '<div class="cx-btnrow"><button id="cx-host">创建房间</button><button id="cx-join">加入房间</button>' +
+      '<button id="cx-auto" style="grid-column:1/-1">自动匹配（同网）</button></div>' +
+      '<div class="cx-warn" id="cx-pvpmsg"></div>' +
+      '<div class="cx-tip">两台设备填相同房间号；先拿 50 个人头者胜。需可访问外网信令服务。</div></div>' +
+      '<div class="cx-sec"><b>按键自定义</b>' + line('显示虚拟键位', 'keys') +
+      '<button class="cx-mini cx-kbtn" id="cx-kedit">进入键位编辑</button>' +
+      '<div class="cx-tip">编辑模式可拖动键位、拖右下角改大小，位置与尺寸自动保存。</div></div></div>' +
+
+      '<div class="cx-foot" id="cx-foot">弹药 --/-- · 敌人 0</div>';
     app.appendChild(panel);
 
-    var toast = el('div', 'cx-toast');
-    toast.id = 'cx-toast';
-    app.appendChild(toast);
+    toastEl = el('div', 'cx-toast', ''); toastEl.id = 'cx-toast'; app.appendChild(toastEl);
+    var duel = el('div', '', ''); duel.id = 'cx-duel'; app.appendChild(duel);
 
-    fab.addEventListener('click', function (e) {
-      e.stopPropagation();
-      show(true);
-    });
-    document.getElementById('cx-hide').addEventListener('click', function (e) {
-      e.stopPropagation();
-      show(false);
-    });
+    fab.addEventListener('click', function (e) { e.stopPropagation(); show(true); });
+    document.getElementById('cx-hide').addEventListener('click', function (e) { e.stopPropagation(); show(false); });
     panel.addEventListener('click', function (e) { e.stopPropagation(); });
 
-    // 开关
+    [].forEach.call(panel.querySelectorAll('#cx-tabs button'), function (b) {
+      b.addEventListener('click', function () {
+        tab = b.getAttribute('data-tab');
+        [].forEach.call(panel.querySelectorAll('#cx-tabs button'), function (x) {
+          x.setAttribute('aria-selected', x === b ? 'true' : 'false');
+        });
+        [].forEach.call(panel.querySelectorAll('.cx-page'), function (p) {
+          p.classList.toggle('on', p.getAttribute('data-page') === tab);
+        });
+        if (tab === 'opt') {
+          var ri = document.getElementById('cx-room');
+          if (ri && !ri.value) lanRoomCode().then(function (c) { if (c && !ri.value) ri.value = c; });
+        }
+      });
+    });
+
     [].forEach.call(panel.querySelectorAll('.cx-sw[data-k]'), function (sw) {
       sw.addEventListener('click', function () {
         var key = sw.getAttribute('data-k');
         cfg[key] = !cfg[key];
-        sync();
-        save();
-        tip((cfg[key] ? '已开启 ' : '已关闭 ') + ({
-          infAmmo: '无限子弹', infLife: '无限生命', homing: '子弹追踪', esp: '敌人透视'
-        }[key] || key));
-      });
-    });
-    // 枪械
-    [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
-      b.addEventListener('click', function () {
-        cfg.gun = +b.getAttribute('data-g');
-        applyGun();
         sync(); save();
-        tip('切换：' + GUNS[cfg.gun].name);
+        if (key === 'keys') buildKeys();
+        tip((cfg[key] ? '已开启 · ' : '已关闭 · ') + labelOf(key));
       });
     });
-    // 滑条
-    var sp = document.getElementById('cx-speed'), jp = document.getElementById('cx-jump');
-    sp.addEventListener('input', function () { cfg.speed = +sp.value; sync(); save(); });
-    jp.addEventListener('input', function () { cfg.jump = +jp.value; sync(); save(); });
-
-    // 拖动
-    var drag = document.getElementById('cx-drag');
-    var dx = 0, dy = 0, dragging = false, sx = 0, sy = 0, px = 0, py = 0;
-    drag.addEventListener('pointerdown', function (e) {
-      if (e.target.closest('button')) return;
-      dragging = true;
-      sx = e.clientX; sy = e.clientY;
-      var r = panel.getBoundingClientRect();
-      px = r.left; py = r.top;
-      try { drag.setPointerCapture(e.pointerId); } catch (er) {}
-      e.preventDefault();
+    [].forEach.call(panel.querySelectorAll('#cx-part button'), function (b) {
+      b.addEventListener('click', function () { cfg.part = b.getAttribute('data-part'); sync(); save(); tip('追踪部位：' + b.textContent); });
     });
-    drag.addEventListener('pointermove', function (e) {
-      if (!dragging) return;
-      dx = px + (e.clientX - sx);
-      dy = py + (e.clientY - sy);
-      place(dx, dy);
+    [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
+      b.addEventListener('click', function () { gunIdx = +b.getAttribute('data-g'); applyGun(); sync(); save(); tip('枪械：' + GUNS[gunIdx].name); });
     });
-    var endDrag = function (e) {
-      if (!dragging) return;
-      dragging = false;
-      try { drag.releasePointerCapture(e.pointerId); } catch (er) {}
-      savePos();
-    };
-    drag.addEventListener('pointerup', endDrag);
-    drag.addEventListener('pointercancel', endDrag);
+    sliders('cx-speed', 'speed', function (v) { return v.toFixed(2) + '×'; });
+    sliders('cx-jump', 'jump', function (v) { return v.toFixed(2) + '×'; });
+    sliders('cx-range', 'range', function (v) { return Math.round(v) + '°'; });
 
-    // 记忆位置
-    try {
-      var pos = JSON.parse(localStorage.getItem('xiaobing.assist.pos') || 'null');
-      if (pos) place(pos.x, pos.y);
-      else { place(null, Math.max(56, Math.round(window.innerHeight * 0.28)), 16); }
-    } catch (e) { place(null, 120, 16); }
+    var fpsSel = document.getElementById('cx-fps');
+    fpsSel.addEventListener('change', function () { cfg.fps = +fpsSel.value; save(); tip('帧率上限：' + (cfg.fps || '不限')); });
+
+    document.getElementById('cx-host').addEventListener('click', function () { pvpStart(true); });
+    document.getElementById('cx-join').addEventListener('click', function () { pvpStart(false); });
+    document.getElementById('cx-auto').addEventListener('click', function () { lanAuto(); });
+    document.getElementById('cx-kedit').addEventListener('click', function () {
+      if (!cfg.keys) { cfg.keys = true; sync(); save(); buildKeys(); }
+      keyEdit = !keyEdit;
+      if (keyLayer) keyLayer.classList.toggle('edit', keyEdit);
+      tip(keyEdit ? '键位编辑：拖动 / 拖右下角缩放' : '键位布局已保存');
+    });
+
+    dragPanel();
+    restorePos();
 
     addEventListener('keydown', function (e) {
-      if (e.code === 'F8' || e.code === 'Insert') {
-        e.preventDefault();
-        show(!panel.classList.contains('on'));
-      }
+      if (e.code === 'F8' || e.code === 'Insert') { e.preventDefault(); show(!panel.classList.contains('on')); }
     });
     sync();
   }
 
-  function place(x, y, rightOff) {
-    if (!panel) return;
-    var w = panel.offsetWidth || 250, h = panel.offsetHeight || 300;
-    if (x == null) {
-      panel.style.left = 'auto';
-      panel.style.right = (rightOff != null ? rightOff : 16) + 'px';
-      panel.style.top = Math.max(56, Math.min(window.innerHeight - h - 8, y || 120)) + 'px';
-      return;
-    }
-    panel.style.right = 'auto';
-    var maxX = window.innerWidth - w - 6, maxY = window.innerHeight - h - 6;
-    panel.style.left = Math.max(6, Math.min(maxX, x)) + 'px';
-    panel.style.top = Math.max(6, Math.min(maxY, y)) + 'px';
+  function line(label, key) {
+    return '<div class="cx-line"><label>' + label + '</label>' +
+      '<button class="cx-sw" data-k="' + key + '" aria-pressed="false"><i></i></button></div>';
   }
 
-  function savePos() {
-    try {
-      var r = panel.getBoundingClientRect();
-      localStorage.setItem('xiaobing.assist.pos', JSON.stringify({ x: r.left, y: r.top }));
-    } catch (e) {}
+  var LAB = {
+    esp: '透视', espBox: '方框', espHp: '血量', espName: '名字', espLine: '射线', espDist: '距离',
+    track: '追踪', wallbang: '子弹穿墙', god: '无敌', noclip: '穿墙',
+    fly: '飞天', spin: '旋转', infAmmo: '无限子弹', endless: '无尽围剿', keys: '虚拟键位'
+  };
+  function labelOf(k) { return LAB[k] || k; }
+
+  function sliders(id, key, fmtv) {
+    var s = document.getElementById(id), o = document.getElementById(id + '-v');
+    s.addEventListener('input', function () { cfg[key] = +s.value; o.textContent = fmtv(+s.value); save(); });
+    s.value = cfg[key];
+    o.textContent = fmtv(+cfg[key]);
+  }
+
+  function sync() {
+    if (!panel) return;
+    [].forEach.call(panel.querySelectorAll('.cx-sw[data-k]'), function (sw) {
+      sw.setAttribute('aria-pressed', cfg[sw.getAttribute('data-k')] ? 'true' : 'false');
+    });
+    [].forEach.call(panel.querySelectorAll('#cx-part button'), function (b) {
+      b.setAttribute('aria-pressed', b.getAttribute('data-part') === cfg.part ? 'true' : 'false');
+    });
+    [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
+      b.setAttribute('aria-pressed', +b.getAttribute('data-g') === gunIdx ? 'true' : 'false');
+    });
+    var s1 = document.getElementById('cx-speed'), s2 = document.getElementById('cx-jump'), s3 = document.getElementById('cx-range');
+    if (s1) { s1.value = cfg.speed; document.getElementById('cx-speed-v').textContent = (+cfg.speed).toFixed(2) + '×'; }
+    if (s2) { s2.value = cfg.jump; document.getElementById('cx-jump-v').textContent = (+cfg.jump).toFixed(2) + '×'; }
+    if (s3) { s3.value = cfg.range; document.getElementById('cx-range-v').textContent = Math.round(cfg.range) + '°'; }
+    var fs = document.getElementById('cx-fps'); if (fs) fs.value = String(cfg.fps);
+    var rm = document.getElementById('cx-room'); if (rm && !rm.value) rm.value = cfg.room || '';
+    if (keyLayer) keyLayer.classList.toggle('on', !!cfg.keys);
+  }
+
+  function tip(text) {
+    if (!toastEl) return;
+    toastEl.textContent = text;
+    toastEl.classList.add('on');
+    clearTimeout(tip._t);
+    tip._t = setTimeout(function () { toastEl.classList.remove('on'); }, 1200);
   }
 
   function show(on) {
@@ -6472,30 +6526,146 @@ errors ${window.__errors.length}${window.__errors.length?`
     fab.style.display = on ? 'none' : 'block';
   }
 
-  function tip(text) {
-    var t = document.getElementById('cx-toast');
-    if (!t) return;
-    t.textContent = text;
-    t.classList.add('on');
-    clearTimeout(tip._t);
-    tip._t = setTimeout(function () { t.classList.remove('on'); }, 1100);
-  }
-
-  function sync() {
+  function place(x, y, rightOff) {
     if (!panel) return;
-    [].forEach.call(panel.querySelectorAll('.cx-sw[data-k]'), function (sw) {
-      var key = sw.getAttribute('data-k');
-      sw.setAttribute('aria-pressed', cfg[key] ? 'true' : 'false');
+    var w = panel.offsetWidth || 288, h = panel.offsetHeight || 430;
+    if (x == null) {
+      panel.style.left = 'auto';
+      panel.style.right = (rightOff != null ? rightOff : 14) + 'px';
+      panel.style.top = Math.max(52, Math.min(window.innerHeight - h - 8, y || 120)) + 'px';
+      return;
+    }
+    panel.style.right = 'auto';
+    panel.style.left = Math.max(6, Math.min(window.innerWidth - w - 6, x)) + 'px';
+    panel.style.top = Math.max(6, Math.min(window.innerHeight - h - 6, y)) + 'px';
+  }
+
+  function restorePos() {
+    try {
+      var p = JSON.parse(localStorage.getItem('xiaobing.assist.pos') || 'null');
+      if (p) place(p.x, p.y); else place(null, Math.max(52, Math.round(window.innerHeight * .22)), 14);
+    } catch (e) { place(null, 110, 14); }
+  }
+
+  function dragPanel() {
+    var head = document.getElementById('cx-drag');
+    var on = false, sx = 0, sy = 0, px = 0, py = 0;
+    head.addEventListener('pointerdown', function (e) {
+      if (e.target.closest('button')) return;
+      on = true; sx = e.clientX; sy = e.clientY;
+      var r = panel.getBoundingClientRect(); px = r.left; py = r.top;
+      try { head.setPointerCapture(e.pointerId); } catch (er) {}
+      e.preventDefault();
     });
-    var s = document.getElementById('cx-speed'), j = document.getElementById('cx-jump');
-    if (s) { s.value = cfg.speed; document.getElementById('cx-speed-v').textContent = (+cfg.speed).toFixed(2) + '×'; }
-    if (j) { j.value = cfg.jump; document.getElementById('cx-jump-v').textContent = (+cfg.jump).toFixed(2) + '×'; }
-    [].forEach.call(panel.querySelectorAll('#cx-guns button'), function (b) {
-      b.setAttribute('aria-pressed', +b.getAttribute('data-g') === cfg.gun ? 'true' : 'false');
+    head.addEventListener('pointermove', function (e) {
+      if (!on) return;
+      place(px + e.clientX - sx, py + e.clientY - sy);
+    });
+    var end = function (e) {
+      if (!on) return; on = false;
+      try { head.releasePointerCapture(e.pointerId); } catch (er) {}
+      var r = panel.getBoundingClientRect();
+      try { localStorage.setItem('xiaobing.assist.pos', JSON.stringify({ x: r.left, y: r.top })); } catch (er) {}
+    };
+    head.addEventListener('pointerup', end);
+    head.addEventListener('pointercancel', end);
+  }
+
+  /* -------------------------------------------------------------- 虚拟键位 */
+  var KEY_DEF = [
+    { id: 'fire', label: '开火', code: 'Enter', x: 90, y: 73, w: 64, h: 64 },
+    { id: 'jump', label: '跳跃', code: 'Space', x: 80, y: 86, w: 52, h: 52 },
+    { id: 'crouch', label: '蹲下', code: 'KeyC', x: 8, y: 82, w: 48, h: 48 },
+    { id: 'reload', label: '换弹', code: 'KeyR', x: 8, y: 69, w: 48, h: 48 },
+    { id: 'sprint', label: '冲刺', code: 'ShiftLeft', x: 18, y: 82, w: 48, h: 48 },
+    { id: 'melee', label: '近战', code: 'KeyF', x: 18, y: 69, w: 48, h: 48 }
+  ];
+  var keyLayout = null;
+
+  function loadLayout() {
+    try { keyLayout = JSON.parse(localStorage.getItem('xiaobing.assist.keys') || 'null'); } catch (e) {}
+    if (!keyLayout) {
+      keyLayout = {};
+      KEY_DEF.forEach(function (d) { keyLayout[d.id] = { x: d.x, y: d.y, w: d.w, h: d.h }; });
+    }
+  }
+  function saveLayout() { try { localStorage.setItem('xiaobing.assist.keys', JSON.stringify(keyLayout)); } catch (e) {} }
+
+  function buildKeys() {
+    if (!cfg.keys && !keyLayer) return;
+    if (!keyLayer) {
+      keyLayer = el('div', ''); keyLayer.id = 'cx-keys';
+      document.getElementById('app').appendChild(keyLayer);
+      loadLayout();
+      KEY_DEF.forEach(function (d) { makeKey(d); });
+    }
+    keyLayer.classList.toggle('on', !!cfg.keys);
+    keyLayer.classList.toggle('edit', keyEdit);
+  }
+
+  function makeKey(def) {
+    var pos = keyLayout[def.id] || { x: def.x, y: def.y, w: def.w, h: def.h };
+    var b = el('div', 'cx-key', def.label);
+    b.style.left = pos.x + '%';
+    b.style.top = pos.y + '%';
+    b.style.width = pos.w + 'px';
+    b.style.height = pos.h + 'px';
+    var rs = el('div', 'rs'); b.appendChild(rs);
+    keyLayer.appendChild(b);
+
+    var held = null;
+    function press(e) {
+      e.preventDefault(); e.stopPropagation();
+      if (keyEdit) { startDrag(e, b, pos, false); return; }
+      held = def.code;
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: def.code, bubbles: true }));
+      b.classList.add('hit');
+    }
+    function release(e) {
+      if (keyEdit) return;
+      if (held) {
+        window.dispatchEvent(new KeyboardEvent('keyup', { code: held, bubbles: true }));
+        held = null;
+      }
+      b.classList.remove('hit');
+    }
+    b.addEventListener('pointerdown', press);
+    b.addEventListener('pointerup', release);
+    b.addEventListener('pointercancel', release);
+    b.addEventListener('pointerleave', release);
+    rs.addEventListener('pointerdown', function (e) {
+      e.preventDefault(); e.stopPropagation();
+      startDrag(e, b, pos, true);
     });
   }
 
-  /* ---------------------------------------------------------------- ESP 画布 */
+  function startDrag(e, node, pos, resize) {
+    var x0 = e.clientX, y0 = e.clientY, w0 = node.offsetWidth, h0 = node.offsetHeight;
+    var l0 = parseFloat(node.style.left), t0 = parseFloat(node.style.top);
+    var W = keyLayer.clientWidth || window.innerWidth, H = keyLayer.clientHeight || window.innerHeight;
+    function move(ev) {
+      if (resize) {
+        pos.w = Math.max(30, w0 + ev.clientX - x0);
+        pos.h = Math.max(30, h0 + ev.clientY - y0);
+        node.style.width = pos.w + 'px';
+        node.style.height = pos.h + 'px';
+      } else {
+        pos.x = Math.max(0, Math.min(100, l0 + (ev.clientX - x0) / W * 100));
+        pos.y = Math.max(0, Math.min(96, t0 + (ev.clientY - y0) / H * 100));
+        node.style.left = pos.x + '%';
+        node.style.top = pos.y + '%';
+      }
+    }
+    function up() {
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', up);
+      saveLayout();
+    }
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', up);
+  }
+
+  /* ---------------------------------------------------------------- ESP 层 */
   function buildCanvas() {
     if (esp) return;
     esp = document.createElement('canvas');
@@ -6505,8 +6675,7 @@ errors ${window.__errors.length}${window.__errors.length?`
     ctx = esp.getContext('2d');
   }
 
-  function resize() {
-    if (!esp) return;
+  function resizeCanvas() {
     dpr = Math.min(2, window.devicePixelRatio || 1);
     var w = esp.clientWidth || window.innerWidth, h = esp.clientHeight || window.innerHeight;
     if (esp.width !== Math.round(w * dpr)) esp.width = Math.round(w * dpr);
@@ -6514,225 +6683,580 @@ errors ${window.__errors.length}${window.__errors.length?`
     return { w: w, h: h };
   }
 
+  var nameSeq = {};
+  function enemyName(en) {
+    if (!en._cxName) {
+      var t = en.type === 'hound' ? '猎犬' : '飞鸥';
+      nameSeq[en.type] = (nameSeq[en.type] || 0) + 1;
+      en._cxName = t + '-' + (100 + nameSeq[en.type]);
+    }
+    return en._cxName;
+  }
+
   function drawESP() {
-    if (!esp || !G || !G.camera) return;
-    var playing = G.game && G.game.state === 'playing';
-    if (!playing || !cfg.esp) { esp.style.display = 'none'; return; }
+    if (!ctx) return;
+    var playing = G && G.game && G.game.state === 'playing';
+    if (!cfg.esp || !playing) { if (esp) esp.style.display = 'none'; return; }
     esp.style.display = 'block';
-    var sz = resize(), w = sz.w, h = sz.h, cam = G.camera;
+    var sz = resizeCanvas(), w = sz.w, h = sz.h, cam = G.camera;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    var fs = Math.max(10, Math.round(w / 118));
     var list = (G.enemies && G.enemies.list) || [];
-    var fs = Math.max(10, Math.round(w / 120));
+
     for (var i = 0; i < list.length; i++) {
       var en = list[i];
       if (!en || !en.alive || !en.pos) continue;
       var hp = en.pos.clone(); if (en.type === 'hound') hp.y += 1.35;
-      var v = hp.project(cam);
-      var dist = en.pos.distanceTo(cam.position);
-      var col = en.type === 'hound' ? '#ff5a40' : '#ffb347';
-      if (v.z < 1) {
-        var x = (v.x * .5 + .5) * w, y = (-v.y * .5 + .5) * h;
-        if (x > -30 && x < w + 30 && y > -30 && y < h + 30) {
-          var hgt = Math.min(h * .75, (h / 2) / (Math.max(1, dist) * Math.tan(cam.fov * Math.PI / 360)) * (en.type === 'hound' ? 1.7 : .7));
-          hgt = Math.max(18, hgt);
-          var wid = hgt * .42;
-          ctx.strokeStyle = col;
-          ctx.globalAlpha = .8;
-          ctx.lineWidth = 1;
-          ctx.strokeRect(x - wid / 2, y - hgt, wid, hgt);
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = col;
-          ctx.font = '600 ' + fs + 'px "PingFang SC",sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText((en.type === 'hound' ? '猎犬 ' : '飞鸥 ') + Math.round(dist) + 'm', x, y - hgt - 5);
-          // 血条
-          var maxHp = en.type === 'hound' ? 140 : 45;
-          var bw = Math.max(30, wid);
-          ctx.fillStyle = 'rgba(11,13,15,.7)';
-          ctx.fillRect(x - bw / 2, y - hgt - 3, bw, 3);
-          ctx.fillStyle = (en.hp / maxHp < .4) ? '#ff5a40' : col;
-          ctx.fillRect(x - bw / 2, y - hgt - 3, bw * Math.max(0, Math.min(1, en.hp / maxHp)), 3);
-        }
+      var v = hp.project(cam), dist = en.pos.distanceTo(cam.position);
+      var col = en.type === 'hound' ? '#ff6a4d' : '#ffb347';
+      if (v.z >= 1) continue;
+      var x = (v.x * .5 + .5) * w, y = (-v.y * .5 + .5) * h;
+      if (x < -60 || x > w + 60 || y < -60 || y > h + 60) continue;
+
+      var pxm = (h / 2) / (Math.max(1, dist) * Math.tan(cam.fov * Math.PI / 360));
+      var bh = Math.max(20, Math.min(h * .8, pxm * (en.type === 'hound' ? 1.75 : .7)));
+      var bw = bh * .42, top = y - bh;
+
+      if (cfg.espLine) {
+        ctx.strokeStyle = col; ctx.globalAlpha = .32; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(w / 2, h * .92); ctx.lineTo(x, y); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      if (cfg.espBox) {
+        ctx.strokeStyle = col; ctx.globalAlpha = .82; ctx.lineWidth = 1;
+        ctx.strokeRect(x - bw / 2, top, bw, bh);
+        var c = Math.max(4, bw * .16); ctx.lineWidth = 1.6;
+        [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (s) {
+          var xx = x + s[0] * bw / 2, yy = top + (s[1] < 0 ? 0 : bh);
+          ctx.beginPath();
+          ctx.moveTo(xx, yy + (s[1] < 0 ? c : -c));
+          ctx.lineTo(xx, yy);
+          ctx.lineTo(xx - s[0] * c, yy);
+          ctx.stroke();
+        });
+        ctx.globalAlpha = 1;
+      }
+      if (cfg.espHp) {
+        var maxHp = en.type === 'hound' ? 140 : 45;
+        var barW = Math.max(36, bw), bx = x - barW / 2, by = top - 5;
+        ctx.globalAlpha = .5; ctx.fillStyle = 'rgba(11,13,15,.8)'; ctx.fillRect(bx, by, barW, 3);
+        ctx.globalAlpha = .95; ctx.fillStyle = (en.hp / maxHp < .4) ? '#ff5a40' : col;
+        ctx.fillRect(bx, by, barW * Math.max(0, Math.min(1, en.hp / maxHp)), 3);
+        ctx.globalAlpha = 1;
+      }
+      ctx.textAlign = 'center';
+      if (cfg.espName) {
+        ctx.fillStyle = col; ctx.font = '600 ' + fs + 'px "PingFang SC",sans-serif';
+        ctx.fillText(enemyName(en), x, top - 12);
+      }
+      if (cfg.espDist) {
+        ctx.fillStyle = 'rgba(232,228,218,.8)'; ctx.font = '500 ' + (fs - 1) + 'px ui-monospace,monospace';
+        ctx.fillText(Math.round(dist) + 'm', x, y + 14);
+      }
+    }
+
+    if (cfg.espDist && G.game.run && G.game.run.relays) {
+      var rel = G.game.run.relays;
+      for (var r = 0; r < rel.length; r++) {
+        var it = rel[r];
+        if (!it || it.cut || !it.o || !it.o.pos) continue;
+        var p0 = it.o.pos.clone(); p0.y += 1.6;
+        var pr = p0.project(cam);
+        if (pr.z >= 1) continue;
+        var rx = (pr.x * .5 + .5) * w, ry = (-pr.y * .5 + .5) * h;
+        if (rx < 0 || rx > w || ry < 0 || ry > h) continue;
+        var dr = p0.distanceTo(cam.position);
+        ctx.strokeStyle = '#ffb347'; ctx.globalAlpha = .85; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(rx, ry - 7); ctx.lineTo(rx + 7, ry); ctx.lineTo(rx, ry + 7); ctx.lineTo(rx - 7, ry); ctx.closePath(); ctx.stroke();
+        ctx.fillStyle = '#ffb347'; ctx.font = '700 ' + (fs + 1) + 'px "PingFang SC",sans-serif';
+        ctx.fillText(it.short || 'R', rx, ry - 11);
+        ctx.fillStyle = 'rgba(232,228,218,.78)'; ctx.font = '500 ' + fs + 'px ui-monospace,monospace';
+        ctx.fillText(Math.round(dr) + 'm', rx, ry + 18);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    if (pvp && pvp.active && pvp.state) {
+      var head = pvp.state.pos.clone(); head.y += 1.55;
+      var pv = head.project(cam);
+      if (pv.z < 1) {
+        var vx = (pv.x * .5 + .5) * w, vy = (-pv.y * .5 + .5) * h;
+        var vd = head.distanceTo(cam.position);
+        var vh = Math.max(30, (h / 2) / (Math.max(1, vd) * Math.tan(cam.fov * Math.PI / 360)) * 1.8);
+        ctx.strokeStyle = '#7ad2ff'; ctx.globalAlpha = .9; ctx.lineWidth = 1.2;
+        ctx.strokeRect(vx - vh * .2, vy, vh * .4, vh);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#7ad2ff'; ctx.font = '600 ' + fs + 'px "PingFang SC",sans-serif';
+        ctx.fillText(pvp.peerName || '对手', vx, vy - 6);
       }
     }
   }
 
-  /* ---------------------------------------------------------------- 游戏钩子 */
-  function getGun() { return GUNS[cfg.gun] || GUNS[0]; }
+  /* --------------------------------------------------------------- 追踪逻辑 */
+  function pickPoint(en, part) {
+    var base = en.pos;
+    if (part === 'head') return en.headPos ? en.headPos.clone() : base.clone().setY(base.y + 1.4);
+    return base.clone().setY(base.y + (en.type === 'hound' ? .9 : .1));
+  }
 
-  function nearestHead(origin) {
-    var list = (G.enemies && G.enemies.list) || [];
-    var best = null, bestD = Infinity;
+  function losOK(a, b) {
+    if (cfg.wallbang) return true;
+    try { return !G.physics || G.physics.lineOfSight(a, b); } catch (e) { return true; }
+  }
+
+  function homingTarget(origin) {
+    var cam = G.camera, list = (G.enemies && G.enemies.list) || [];
+    var fwd = cam.getWorldDirection(new V3());
+    var cosLim = Math.cos(Math.max(5, cfg.range) * Math.PI / 360);
+    var best = null, bestScore = Infinity;
     for (var i = 0; i < list.length; i++) {
       var en = list[i];
       if (!en || !en.alive || !en.pos) continue;
-      var p = en.headPos ? en.headPos.clone() : en.pos.clone();
-      if (!en.headPos) p.y += (en.type === 'hound' ? 1.35 : 0.05);
-      var d = p.distanceTo(origin);
-      if (d < 1 || d > 180) continue;
-      var los = true;
-      try { los = !G.physics || G.physics.lineOfSight(origin, p); } catch (e) { los = true; }
-      if (!los) continue;
-      if (d < bestD) { bestD = d; best = p; }
+      var partPick = cfg.part;
+      if (partPick === 'auto') partPick = losOK(origin, en.headPos || en.pos) ? 'head' : 'body';
+      var p = pickPoint(en, partPick);
+      var d = p.clone().sub(origin), len = d.length();
+      if (len < .4 || len > 220) continue;
+      var cos = (d.x * fwd.x + d.y * fwd.y + d.z * fwd.z) / len;
+      if (cos < cosLim) continue;
+      if (!losOK(origin, p)) continue;
+      var sc = (1 - cos) * 100 + len * .06;
+      if (sc < bestScore) { bestScore = sc; best = p; }
     }
     return best;
   }
 
+  /* ---------------------------------------------------------------- 游戏钩子 */
+  function getGun() { return GUNS[gunIdx] || GUNS[0]; }
+  function applyGun() {
+    if (!G || !G.weapon) return;
+    var w = G.weapon, g = getGun();
+    w.magSize = g.mag; w.ammo = Math.min(w.ammo, g.mag); w.reserve = Math.max(w.reserve, g.reserve);
+  }
+
   function hookShot() {
     var orig = G.combat.playerShot;
+    origShot = orig;
     G.combat.playerShot = function (origin, dir, opts) {
-      var gun = getGun();
+      var g = getGun();
+      var isPlayer = origin && G.player && origin.distanceTo(G.player.eye) < 1.2;
       try {
-        if (origin && G.player && origin.distanceTo(G.player.eye) < 1.2) {
-          lastShotAt = G.time ? G.time.t : 0;
-        }
-        if (cfg.homing && origin && G.player && origin.distanceTo(G.player.eye) < 1.2) {
-          var aim = nearestHead(origin);
-          if (aim) {
-            dir = aim.clone().sub(origin).normalize();
-          } else {
-            dir = G.camera ? G.camera.getWorldDirection(new V3()) : dir;
+        if (isPlayer) {
+          lastShotAt = G.time.t;
+          if (pvp && pvp.active) pvpShootTest(origin, dir);
+          if (cfg.track) {
+            var aim = homingTarget(origin);
+            if (aim) dir = aim.clone().sub(origin).normalize();
           }
         }
       } catch (e) {}
-      if (opts) opts = Object.assign({}, opts, { damage: (opts.damage || 28) * gun.dmg });
+      if (opts) opts = Object.assign({}, opts, { damage: (opts.damage || 28) * g.dmg });
       return orig.call(this, origin, dir, opts);
     };
   }
 
-  function applyGun() {
-    if (!G || !G.weapon) return;
-    var w = G.weapon, gun = getGun();
-    w.magSize = gun.mag;
-    w.ammo = Math.min(w.ammo, gun.mag);
-    w.reserve = Math.max(w.reserve, gun.reserve);
+  function hookPhysics() {
+    origMoveCapsule = G.physics.moveCapsule;
+    G.physics.moveCapsule = function (pos, vel, dt) {
+      if (!cfg.noclip && !cfg.fly) return origMoveCapsule.apply(this, arguments);
+      pos.x += vel.x * dt;
+      pos.z += vel.z * dt;
+      if (cfg.fly) {
+        var up = 0;
+        try {
+          if (G.input.down('jump')) up = 7.2;
+          else if (G.input.down('crouch')) up = -7.2;
+        } catch (e) {}
+        pos.y += up * dt;
+      }
+      vel.y = 0;
+      return { onGround: true };
+    };
   }
 
-  function playerFrame(dt, P) {
-    // 移速：直接改 player.tuning，游戏每帧读取
+  function preWeapon() {
+    var P = G.player, W = G.weapon;
+    if (cfg.god || (pvp && pvp.active)) {
+      P.invulnerable = true;
+      if (P.health < P.maxHealth) P.health = P.maxHealth;
+    } else P.invulnerable = false;
+    if (cfg.infAmmo) { W.ammo = W.magSize; W.reserve = Math.max(W.reserve || 0, 400); }
+    var gap = getGun().gap;
+    if (G.input && G.input.fire && G.time.t - lastShotAt < gap - .004) G.input.fire = false;
+  }
+
+  function postWeapon() {
+    if (cfg.infAmmo && G.weapon) {
+      G.weapon.ammo = G.weapon.magSize;
+      G.weapon.reserve = Math.max(G.weapon.reserve || 0, 400);
+    }
+    drawESP();
+    tickEndless();
+    tickFpsMeter();
+  }
+
+  function prePlayer(dt) {
+    var P = G.player;
     if (baseTune && P.tuning) {
       P.tuning.walk = baseTune.walk * cfg.speed;
       P.tuning.sprint = baseTune.sprint * cfg.speed;
+      P.tuning.crouch = baseTune.crouch * Math.min(cfg.speed, 2);
+    }
+    if (cfg.spin) P.yaw += 2.2 * dt;
+  }
+
+  function postPlayer(wasGround) {
+    var P = G.player;
+    if (wasGround && !P.onGround && P.vel.y > 0 && cfg.jump > 1) P.vel.y *= cfg.jump;
+    if (cfg.fly) P.vel.y = 0;
+  }
+
+  function tickFpsMeter() {
+    drawCount++;
+    var now = performance.now();
+    if (!fpsT0) fpsT0 = now;
+    if (now - fpsT0 >= 1000) {
+      var fps = Math.round(drawCount * 1000 / (now - fpsT0));
+      drawCount = 0; fpsT0 = now;
+      var o = document.getElementById('cx-fps-v');
+      if (o) o.textContent = fps + ' FPS';
     }
   }
 
-  function postPlayer(dt, P, wasOnGround) {
-    // 高跳：起跳瞬间放大上升速度
-    if (wasOnGround && !P.onGround && P.vel && P.vel.y > 0 && cfg.jump > 1.0) {
-      P.vel.y *= cfg.jump;
-    }
-  }
-
-  function preWeapon(dt) {
-    if (!G) return;
-    var P = G.player, W = G.weapon;
-    if (!P || !W) return;
-
-    if (cfg.infLife) {
-      P.invulnerable = true;
-      if (P.health < P.maxHealth) P.health = P.maxHealth;
-    } else {
-      P.invulnerable = false;
-    }
-    if (cfg.infAmmo) {
-      W.ammo = W.magSize;
-      W.reserve = Math.max(W.reserve || 0, 300);
-    }
-
-    // 枪械射速门槛：重击/激光限制连发
-    var gun = getGun();
-    if (G.input && G.input.fire) {
-      var t = G.time ? G.time.t : 0;
-      if (t - lastShotAt < gun.gap - 0.004) {
-        G.input.fire = false;
+  function applyFps() {
+    if (!G || !G.renderer || renderHooked) return;
+    origRender = G.renderer.render;
+    G.renderer.render = function (scene, camera) {
+      if (cfg.fps) {
+        var now = performance.now(), iv = 1000 / cfg.fps;
+        if (now - lastDraw < iv - 1) return;
+        lastDraw = now;
       }
+      return origRender.apply(this, arguments);
+    };
+    renderHooked = true;
+  }
+
+  /* ------------------------------------------------------------- 无尽围剿 */
+  function tickEndless() {
+    if (!cfg.endless || !G.game || G.game.state !== 'playing' || !G.player.alive) return;
+    var now = G.time.t;
+    if (now - lastEndless < 3.2) return;
+    var alive = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
+    if (alive >= 6) return;
+    lastEndless = now;
+    var P = G.player.pos, ang = Math.random() * Math.PI * 2, rr = 24 + Math.random() * 16;
+    var pos = new V3(P.x + Math.cos(ang) * rr, 0, P.z + Math.sin(ang) * rr);
+    try {
+      if (Math.random() < .55) G.enemies.spawn('hound', pos, {});
+      else { pos.y = 3 + Math.random() * 3; G.enemies.spawn('gull', pos, {}); }
+    } catch (e) {}
+  }
+
+  /* --------------------------------------------------------- 局域网 50 杀对战 */
+  function raySphere(o, d, c, r) {
+    var m = c.clone().sub(o);
+    var b = m.dot(d), cc = m.dot(m) - r * r, disc = b * b - cc;
+    if (disc < 0) return -1;
+    var t = -b - Math.sqrt(disc);
+    return t > 0 ? t : -1;
+  }
+
+  function pvpShow(on) {
+    var d = document.getElementById('cx-duel');
+    if (d) d.classList.toggle('on', !!on);
+  }
+
+  function pvpHud() {
+    var d = document.getElementById('cx-duel');
+    if (!d || !pvp) return;
+    d.innerHTML = '<div class="sc"><span>我</span><b>' + pvp.kills + '</b>' +
+      '<span>· 先到 50 ·</span><b>' + pvp.theirKills + '</b><span>对手</span></div>' +
+      '<div class="hp"><i style="width:' + Math.max(0, pvp.hp) + '%"></i></div>' +
+      '<div class="nm">' + (pvp.connected ? ('房间 ' + pvp.room + ' · ' + (pvp.peerName || '对手') + ' · HP ' + Math.max(0, Math.round(pvp.hp))) : '等待对手接入…') + '</div>';
+  }
+
+  function pvpMsg(text) {
+    var w = document.getElementById('cx-pvpmsg');
+    if (w) { w.textContent = text; w.classList.toggle('on', !!text); }
+  }
+
+  function lanRoomCode() {
+    return fetch('https://api64.ipify.org?format=json', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var ip = (j && j.ip) || '';
+        var parts = ip.split('.');
+        if (parts.length < 4) return '';
+        var n = ((+parts[2] || 0) * 1000 + (+parts[3] || 0)) % 900000 + 100000;
+        return String(n).slice(0, 6);
+      })
+      .catch(function () { return ''; });
+  }
+
+  function lanAuto() {
+    var inp = document.getElementById('cx-room');
+    pvpMsg('正在识别当前网络…');
+    lanRoomCode().then(function (code) {
+      if (code) { inp.value = code; cfg.room = code; save(); }
+      if (!inp.value) { pvpMsg('无法识别网络，请手动填写房间号'); return; }
+      pvpStart(true);
+    });
+  }
+
+  function loadPeer() {
+    return new Promise(function (res, rej) {
+      if (window.Peer) return res(window.Peer);
+      var s = document.createElement('script');
+      s.src = 'https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js';
+      s.onload = function () { window.Peer ? res(window.Peer) : rej(new Error('联机组件加载异常')); };
+      s.onerror = function () { rej(new Error('无法加载联机组件，请检查网络')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function pvpStart(host) {
+    var room = (document.getElementById('cx-room').value || '').replace(/\D/g, '').slice(0, 6);
+    if (room.length < 4) { pvpMsg('房间号至少 4 位数字'); return; }
+    cfg.room = room; save();
+    if (pvp && pvp.peer) { try { pvp.peer.destroy(); } catch (e) {} }
+    pvp = { active: true, connected: false, host: !!host, room: room, kills: 0, theirKills: 0, hp: 100, peerName: '', state: null, lastSend: 0 };
+    pvpMsg('正在连接…');
+    loadPeer().then(function (Peer) {
+      var id = 'xb3a-v3-' + room;
+      var peer;
+      try {
+        peer = host ? new Peer(id, { debug: 0 }) : new Peer({ debug: 0 });
+      } catch (e) { pvpMsg('联机初始化失败'); return; }
+      pvp.peer = peer;
+      peer.on('error', function (err) {
+        if (err.type === 'unavailable-id' && host) {
+          try { peer.destroy(); } catch (e) {}
+          pvpStart(false);
+        } else if (err.type === 'peer-unavailable') {
+          pvpMsg('房间不存在，请确认房主已创建');
+        } else {
+          pvpMsg('联机错误：' + (err.type || 'unknown'));
+        }
+      });
+      peer.on('open', function () {
+        console.log('[pvp] peer open', host ? 'host' : 'guest', peer.id);
+        if (!host) {
+          var c0 = peer.connect(id, { reliable: true });
+          console.log('[pvp] dial', id, c0 && c0.peerConnection ? 'pc' : '');
+          c0.on('error', function (e) { console.log('[pvp] dial error', e && e.type, e && e.message); });
+          bindConn(c0);
+        } else {
+          pvpMsg('房间已创建，等待对手加入…');
+        }
+      });
+      peer.on('connection', function (conn) { console.log('[pvp] incoming conn'); bindConn(conn); });
+    }).catch(function (e) { pvpMsg(e.message); });
+  }
+
+  function bindConn(conn) {
+    conn.on('open', function () {
+      console.log('[pvp] connection open');
+      pvp.conn = conn; pvp.connected = true;
+      conn.send({ t: 'hi', name: '玩家' + Math.floor(Math.random() * 900 + 100) });
+      pvpMsg(''); pvpShow(true); pvpHud(); ensureAvatar();
+      tip('对手已接入 · 50 杀对战开始');
+    });
+    conn.on('data', onPvpData);
+    conn.on('error', function (e) { console.log('[pvp] conn error', e && e.message); });
+    conn.on('close', function () {
+      console.log('[pvp] connection closed');
+      if (!pvp) return;
+      pvp.connected = false; pvpMsg('对手已断开');
+      pvpHud();
+      if (avatar) avatar.visible = false;
+    });
+  }
+
+  function onPvpData(msg) {
+    if (!msg || !msg.t || !pvp) return;
+    if (msg.t === 'hi') { pvp.peerName = msg.name || '对手'; pvpHud(); return; }
+    if (msg.t === 's') {
+      if (!msg.p) return;
+      pvp.state = { pos: new V3(+msg.p[0], +msg.p[1], +msg.p[2]), yaw: +msg.p[3], pitch: +msg.p[4] };
+      return;
+    }
+    if (msg.t === 'h') {
+      pvp.hp -= (+msg.d || 10);
+      flashDamage(); pvpHud();
+      if (pvp.hp <= 0) {
+        pvp.hp = 0; pvp.theirKills++;
+        if (pvp.conn) pvp.conn.send({ t: 'dead' });
+        pvpRespawn(); pvpHud(); checkWin();
+      }
+      return;
+    }
+    if (msg.t === 'dead') { pvp.kills++; pvpHud(); checkWin(); return; }
+    if (msg.t === 'win') { pvp.theirKills = 50; pvpHud(); checkWin(); }
+  }
+
+  function flashDamage() {
+    var d = document.createElement('div');
+    d.style.cssText = 'position:absolute;inset:0;background:rgba(255,90,64,.16);z-index:44;pointer-events:none;transition:opacity .35s';
+    document.getElementById('app').appendChild(d);
+    requestAnimationFrame(function () { d.style.opacity = '0'; });
+    setTimeout(function () { d.remove(); }, 430);
+  }
+
+  function pvpRespawn() {
+    pvp.hp = 100;
+    try {
+      var ps = G.level && G.level.playerStart;
+      if (ps) { G.player.pos.copy(ps.pos); G.player.yaw = ps.yaw || 0; G.player.vel.set(0, 0, 0); }
+    } catch (e) {}
+  }
+
+  function checkWin() {
+    if (pvp.kills >= 50 || pvp.theirKills >= 50) {
+      var win = pvp.kills >= 50;
+      tip(win ? '对战胜利 · 先达 50 杀' : '对战结束 · 对手先达 50 杀');
+      if (pvp.conn) pvp.conn.send({ t: 'win' });
+      pvp.kills = 0; pvp.theirKills = 0;
+      setTimeout(pvpHud, 600);
     }
   }
 
+  function ensureAvatar() {
+    if (avatar || !G || !G.scene) return;
+    var T = THREE;
+    avatar = new T.Group();
+    var mat = new T.MeshStandardMaterial({ color: 0x2a3238, roughness: .8, metalness: .15 });
+    var visor = new T.MeshStandardMaterial({ color: 0x1a1f24, emissive: 0xffb347, emissiveIntensity: .9, roughness: .3 });
+    var torso = new T.Mesh(new T.BoxGeometry(.56, .82, .3), mat); torso.position.y = 1.02;
+    var head = new T.Mesh(new T.BoxGeometry(.26, .26, .26), mat); head.position.y = 1.58;
+    var face = new T.Mesh(new T.BoxGeometry(.2, .06, .02), visor); face.position.set(0, 1.6, -.14);
+    var legL = new T.Mesh(new T.BoxGeometry(.18, .62, .2), mat); legL.position.set(-.14, .31, 0);
+    var legR = new T.Mesh(new T.BoxGeometry(.18, .62, .2), mat); legR.position.set(.14, .31, 0);
+    var armL = new T.Mesh(new T.BoxGeometry(.14, .62, .16), mat); armL.position.set(-.36, 1.05, 0);
+    var armR = new T.Mesh(new T.BoxGeometry(.14, .62, .16), mat); armR.position.set(.36, 1.05, 0);
+    avatar.add(torso, head, face, legL, legR, armL, armR);
+    avatar.visible = false;
+    G.scene.add(avatar);
+  }
+
+  function pvpShootTest(origin, dir) {
+    if (!pvp.connected || !pvp.state) return;
+    var headC = pvp.state.pos.clone(); headC.y += 1.58;
+    var bodyC = pvp.state.pos.clone(); bodyC.y += 1.0;
+    var th = raySphere(origin, dir, headC, .28);
+    var tb = raySphere(origin, dir, bodyC, .45);
+    var pick = -1, part = 'body', dmg = 14;
+    if (th > 0 && (tb < 0 || th < tb)) { pick = th; part = 'head'; dmg = 34; }
+    else if (tb > 0) { pick = tb; }
+    if (pick < 0) return;
+    var wall = 1e9;
+    try { var r = G.physics.raycast(origin, dir, pick + 2); if (r) wall = r.dist; } catch (e) {}
+    if (wall < pick - .2) return;
+    if (pvp.conn) pvp.conn.send({ t: 'h', d: dmg, part: part });
+    tip(part === 'head' ? '命中头部 -' + dmg : '命中 -' + dmg);
+  }
+
+  function pvpTick(dt) {
+    if (!pvp || !pvp.active || !G || !G.player) return;
+    var now = performance.now();
+    if (pvp.connected && now - (pvp.lastSend || 0) > 90) {
+      pvp.lastSend = now;
+      var p = G.player;
+      if (pvp.conn) pvp.conn.send({ t: 's', p: [p.pos.x, p.pos.y, p.pos.z, p.yaw, p.pitch] });
+    }
+    if (avatar && pvp.state) {
+      avatar.visible = pvp.connected;
+      var d = pvp.state.pos.clone().sub(avatar.position);
+      if (d.length() > 6) avatar.position.copy(pvp.state.pos);
+      else avatar.position.lerp(pvp.state.pos, Math.min(1, 12 * dt));
+      avatar.rotation.y = pvp.state.yaw + Math.PI;
+    }
+  }
+
+  /* ----------------------------------------------------------------- 挂载 */
   function attach() {
     if (hooked) return;
     G = window.__G;
     if (!G || !G.player || !G.weapon || !G.combat || !G.camera) return;
-    THREE = G.THREE;
-    V3 = THREE && THREE.Vector3;
+    THREE = G.THREE; V3 = THREE && THREE.Vector3;
     if (!V3) return;
     hooked = true;
 
-    // 原始移动参数
     var T = G.player.tuning;
-    if (T && T.walk != null && T.sprint != null) {
-      baseTune = { walk: T.walk, sprint: T.sprint, crouch: T.crouch };
-    }
+    if (T && T.walk) baseTune = { walk: T.walk, sprint: T.sprint, crouch: T.crouch };
 
     hookShot();
+    hookPhysics();
     applyGun();
+    applyFps();
 
-    // 玩家 update：前调移速，后判高跳
     var pu = G.player.update;
     G.player.update = function (dt) {
-      try { playerFrame(dt, this); } catch (e) {}
+      try { prePlayer(dt); } catch (e) {}
       var was = this.onGround;
       var r = pu.call(this, dt);
-      try { postPlayer(dt, this, was); } catch (e) {}
+      try { postPlayer(was); } catch (e) {}
       return r;
     };
 
-    // 武器 update：帧前增强 + 帧后补弹/画 ESP
     var wu = G.weapon.update;
     G.weapon.update = function (dt) {
-      try { preWeapon(dt); } catch (e) {}
+      try { preWeapon(); } catch (e) {}
       var r = wu.call(this, dt);
-      try {
-        if (cfg.infAmmo) {
-          G.weapon.ammo = G.weapon.magSize;
-          G.weapon.reserve = Math.max(G.weapon.reserve || 0, 300);
-        }
-        drawESP();
-      } catch (e) {}
+      try { postWeapon(); } catch (e) {}
       return r;
     };
 
     buildCanvas();
     buildUI();
-    watchState();
-    console.log('[assist] 已挂载');
+    applyFps();
+    if (G.game && G.game.state === 'playing') { show(true); lastState = 'playing'; }
+    watch();
+    console.log('[assist] v3 mounted');
   }
 
-  function watchState() {
+  function watch() {
     setInterval(function () {
       if (!G || !G.game || !panel) return;
       var st = G.game.state;
-      if (st === 'playing' && lastState !== 'playing') show(true);
-      if (st !== 'playing' && st !== 'paused') show(false);
+      if (st === 'playing' && lastState !== 'playing') {
+        show(true);
+        if (pvp && pvp.active && pvp.connected) pvpShow(true);
+      }
+      if (st !== 'playing' && st !== 'paused') { show(false); pvpShow(false); }
       lastState = st;
     }, 260);
 
     setInterval(function () {
-      if (!G || !G.weapon || !panel || !panel.classList.contains('on')) return;
-      var f = document.getElementById('cx-foot');
-      if (!f) return;
-      var alive = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
-      var w = G.weapon;
-      f.textContent = '弹药 ' + (w.ammo != null ? w.ammo : '--') + '/' +
-        (w.reserve != null ? w.reserve : '--') + ' · 敌人 ' + alive + ' · ' + getGun().name;
-    }, 300);
+      if (!G || !G.weapon || !panel) return;
+      if (panel.classList.contains('on')) {
+        var f = document.getElementById('cx-foot');
+        if (f) {
+          var alive = G.enemies && G.enemies.aliveCount ? G.enemies.aliveCount() : 0;
+          f.textContent = '弹药 ' + G.weapon.ammo + '/' + G.weapon.reserve + ' · 敌人 ' + alive + ' · ' + getGun().name;
+        }
+      }
+      if (keyLayer) keyLayer.classList.toggle('on', !!cfg.keys);
+    }, 320);
+
+    setInterval(function () {
+      if (pvp && pvp.active) { pvpHud(); pvpTick(0.12); }
+    }, 120);
   }
 
   var timer = setInterval(function () {
-    try { attach(); } catch (e) { console.warn('[assist] attach', e); }
+    try { attach(); } catch (e) { console.warn('[assist]', e); }
     if (hooked) clearInterval(timer);
   }, 120);
-  setTimeout(function () { try { attach(); } catch (e) {} }, 1600);
+  setTimeout(function () { try { attach(); } catch (e) {} }, 1700);
 
   addEventListener('resize', function () {
     if (!panel || !panel.classList.contains('on')) return;
-    var r = panel.getBoundingClientRect();
-    place(r.left, r.top);
+    var r = panel.getBoundingClientRect(); place(r.left, r.top);
   });
 })();
 
 </script>
-
 </body>
 </html>
